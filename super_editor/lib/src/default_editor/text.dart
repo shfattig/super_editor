@@ -826,6 +826,7 @@ class TextComponent extends StatefulWidget {
     this.highlightWhenEmpty = false,
     this.underlines = const [],
     this.showDebugPaint = false,
+    this.computeInlineSpanOverride,
   }) : super(key: key);
 
   final AttributedText text;
@@ -869,6 +870,17 @@ class TextComponent extends StatefulWidget {
   final List<Underlines> underlines;
 
   final bool showDebugPaint;
+
+  /// Optional override for how the rich text span is computed from [text].
+  ///
+  /// When non-null, this callback is called instead of [AttributedText.computeInlineSpan].
+  /// The callback receives the resolved [AttributionStyleBuilder] (already incorporating
+  /// the [Stylesheet]'s style rules) so callers can compose on top of it.
+  ///
+  /// Intended for custom components that need cursor-aware or context-aware text
+  /// rendering (e.g. revealing/hiding markdown syntax markers based on cursor position).
+  final InlineSpan Function(BuildContext context, AttributionStyleBuilder styleBuilder)?
+      computeInlineSpanOverride;
 
   @override
   TextComponentState createState() => TextComponentState();
@@ -1286,11 +1298,13 @@ class TextComponentState extends State<TextComponent> with DocumentComponent imp
     return IgnorePointer(
       child: SuperText(
         key: _textKey,
-        richText: widget.text.computeInlineSpan(
-          context,
-          _textStyleWithBlockType,
-          widget.inlineWidgetBuilders,
-        ),
+        richText: widget.computeInlineSpanOverride != null
+            ? widget.computeInlineSpanOverride!(context, _textStyleWithBlockType)
+            : widget.text.computeInlineSpan(
+                context,
+                _textStyleWithBlockType,
+                widget.inlineWidgetBuilders,
+              ),
         textAlign: widget.textAlign ?? TextAlign.left,
         textDirection: widget.textDirection ?? TextDirection.ltr,
         textScaler: widget.textScaler ?? MediaQuery.textScalerOf(context),
