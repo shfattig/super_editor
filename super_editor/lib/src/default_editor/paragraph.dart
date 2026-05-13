@@ -185,6 +185,7 @@ class ParagraphComponentViewModel extends SingleColumnLayoutComponentViewModel w
     this.selection,
     required this.selectionColor,
     this.highlightWhenEmpty = false,
+    this.computeInlineSpanOverride,
     Set<CustomUnderline> customUnderlines = const <CustomUnderline>{},
     TextRange? composingRegion,
     bool showComposingRegionUnderline = false,
@@ -233,6 +234,11 @@ class ParagraphComponentViewModel extends SingleColumnLayoutComponentViewModel w
   @override
   bool highlightWhenEmpty;
 
+  /// Optional override for how the rich text span is computed.
+  /// See [TextComponent.computeInlineSpanOverride].
+  InlineSpan Function(BuildContext context, AttributionStyleBuilder styleBuilder)?
+      computeInlineSpanOverride;
+
   @override
   ParagraphComponentViewModel copy() {
     final copy = internalCopy(
@@ -257,7 +263,8 @@ class ParagraphComponentViewModel extends SingleColumnLayoutComponentViewModel w
       ..blockType = blockType
       ..indent = indent
       ..indentCalculator = indentCalculator
-      ..textScaler = textScaler;
+      ..textScaler = textScaler
+      ..computeInlineSpanOverride = computeInlineSpanOverride;
 
     return copy;
   }
@@ -523,6 +530,7 @@ class _ParagraphComponentState extends State<ParagraphComponent>
               highlightWhenEmpty: widget.viewModel.highlightWhenEmpty,
               underlines: widget.viewModel.createUnderlines(),
               showDebugPaint: widget.showDebugPaint,
+              computeInlineSpanOverride: widget.viewModel.computeInlineSpanOverride,
             ),
           ),
         ],
