@@ -142,25 +142,28 @@ class _SingleColumnDocumentLayoutState extends State<SingleColumnDocumentLayout>
       return null;
     }
 
-    return _getDocumentPositionInComponentNearOffset(componentKey, documentOffset);
+    final containerBox = boxContext.findRenderObject() as RenderBox;
+    return _getDocumentPositionInComponentNearOffset(componentKey, documentOffset, containerBox);
   }
 
   @override
   DocumentPosition? getDocumentPositionNearestToOffset(Offset rawDocumentOffset) {
     // Constrain the incoming offset to sit within the width
     // of this document layout.
-    final docBox = boxContext.findRenderObject() as RenderBox;
+    // Hoist the container box lookup once; pass it to helpers to avoid
+    // redundant findRenderObject() calls in every sub-method.
+    final containerBox = boxContext.findRenderObject() as RenderBox;
     final documentOffset = Offset(
       // Notice the +1/-1. Experimentally, I determined that if we confine
       // to the exact width, that x-value is considered outside the
       // component RenderBox's. However, 1px less than that is
       // considered to be within the component RenderBox's.
-      rawDocumentOffset.dx.clamp(1.0, max(docBox.size.width - 1.0, 1.0)),
+      rawDocumentOffset.dx.clamp(1.0, max(containerBox.size.width - 1.0, 1.0)),
       rawDocumentOffset.dy,
     );
     editorLayoutLog.info('Getting document position near offset: $documentOffset');
 
-    if (_isAboveStartOfContent(documentOffset)) {
+    if (_isAboveStartOfContent(documentOffset, containerBox)) {
       // The given offset is above the start of the content.
       // Return the position at the start of the first node.
       final firstPosition = _findFirstPosition();
@@ -169,7 +172,7 @@ class _SingleColumnDocumentLayoutState extends State<SingleColumnDocumentLayout>
       }
     }
 
-    if (_isBeyondDocumentEnd(documentOffset)) {
+    if (_isBeyondDocumentEnd(documentOffset, containerBox)) {
       // The given offset is beyond the end of the content.
       // Return the position at the end of the last node.
       final lastPosition = _findLastPosition();
@@ -178,19 +181,20 @@ class _SingleColumnDocumentLayoutState extends State<SingleColumnDocumentLayout>
       }
     }
 
-    final componentKey = _findComponentClosestToOffset(documentOffset);
+    final componentKey = _findComponentClosestToOffset(documentOffset, containerBox);
     if (componentKey == null || componentKey.currentContext == null) {
       return null;
     }
 
-    return _getDocumentPositionInComponentNearOffset(componentKey, documentOffset);
+    return _getDocumentPositionInComponentNearOffset(componentKey, documentOffset, containerBox);
   }
 
-  DocumentPosition? _getDocumentPositionInComponentNearOffset(GlobalKey componentKey, Offset documentOffset) {
+  DocumentPosition? _getDocumentPositionInComponentNearOffset(
+      GlobalKey componentKey, Offset documentOffset, RenderBox containerBox) {
     final component = componentKey.currentState as DocumentComponent;
     final componentBox = componentKey.currentContext!.findRenderObject() as RenderBox;
     editorLayoutLog.info(' - found node at position: $component');
-    final componentOffset = _componentOffset(componentBox, documentOffset);
+    final componentOffset = _componentOffset(componentBox, documentOffset, containerBox);
     final componentPosition = component.getPositionAtOffset(componentOffset);
 
     if (componentPosition == null) {
@@ -206,7 +210,7 @@ class _SingleColumnDocumentLayoutState extends State<SingleColumnDocumentLayout>
   }
 
   /// Returns whether or not [documentOffset] is above the start of the document's content.
-  bool _isAboveStartOfContent(Offset documentOffset) {
+  bool _isAboveStartOfContent(Offset documentOffset, RenderBox containerBox) {
     if (_topToBottomComponentKeys.isEmpty) {
       // There is no component in the document.
       return true;
@@ -214,13 +218,13 @@ class _SingleColumnDocumentLayoutState extends State<SingleColumnDocumentLayout>
 
     final componentKey = _topToBottomComponentKeys.first;
     final componentBox = componentKey.currentContext!.findRenderObject() as RenderBox;
-    final offsetAtComponent = _componentOffset(componentBox, documentOffset);
+    final offsetAtComponent = _componentOffset(componentBox, documentOffset, containerBox);
 
     return offsetAtComponent.dy < 0.0;
   }
 
   /// Returns whether or not [documentOffset] is beyond the end of the document.
-  bool _isBeyondDocumentEnd(Offset documentOffset) {
+  bool _isBeyondDocumentEnd(Offset documentOffset, RenderBox containerBox) {
     if (_topToBottomComponentKeys.isEmpty) {
       // There is no component in the document.
       return true;
@@ -228,7 +232,7 @@ class _SingleColumnDocumentLayoutState extends State<SingleColumnDocumentLayout>
 
     final componentKey = _topToBottomComponentKeys.last;
     final componentBox = componentKey.currentContext!.findRenderObject() as RenderBox;
-    final offsetAtComponent = _componentOffset(componentBox, documentOffset);
+    final offsetAtComponent = _componentOffset(componentBox, documentOffset, containerBox);
 
     return offsetAtComponent.dy > componentBox.size.height;
   }
@@ -556,11 +560,11 @@ class _SingleColumnDocumentLayoutState extends State<SingleColumnDocumentLayout>
     return null;
   }
 
-  GlobalKey? _findComponentClosestToOffset(Offset documentOffset) {
+  GlobalKey? _findComponentClosestToOffset(Offset documentOffset, [RenderBox? containerBox]) {
     if (_topToBottomComponentKeys.isEmpty) return null;
 
-    // Hoist the container box lookup so it is computed only once.
-    final containerBox = boxContext.findRenderObject() as RenderBox;
+    // Use the caller-supplied container box, or look it up once if not provided.
+    containerBox ??= boxContext.findRenderObject() as RenderBox;
 
     // Binary search over the top-to-bottom ordered key list.
     // Components are laid out vertically with no overlap, so their y-ranges
@@ -700,8 +704,8 @@ class _SingleColumnDocumentLayoutState extends State<SingleColumnDocumentLayout>
     }
   }
 
-  Offset _componentOffset(RenderBox componentBox, Offset documentOffset) {
-    final containerBox = boxContext.findRenderObject() as RenderBox;
+  Offset _componentOffset(RenderBox componentBox, Offset documentOffset, [RenderBox? containerBox]) {
+    containerBox ??= boxContext.findRenderObject() as RenderBox;
     final contentOffset = componentBox.localToGlobal(Offset.zero, ancestor: containerBox);
     final contentRect = contentOffset & componentBox.size;
 
