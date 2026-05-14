@@ -269,10 +269,14 @@ class _DocumentMouseInteractorState extends State<DocumentMouseInteractor> with 
 
   void _onTapUp(TapUpDetails details) {
     editorGesturesLog.info("Tap up on document");
+    // ignore: avoid_print
+    final _tapSw = Stopwatch()..start();
     final docOffset = _getDocOffsetFromGlobalOffset(details.globalPosition);
     editorGesturesLog.fine(" - document offset: $docOffset");
 
     _focusNode.requestFocus();
+    // ignore: avoid_print
+    print('[TAP] after requestFocus: ${_tapSw.elapsedMilliseconds}ms');
 
     if (widget.contentTapHandlers != null) {
       for (final handler in widget.contentTapHandlers!) {
@@ -292,6 +296,8 @@ class _DocumentMouseInteractorState extends State<DocumentMouseInteractor> with 
     }
 
     final docPosition = _docLayout.getDocumentPositionNearestToOffset(docOffset);
+    // ignore: avoid_print
+    print('[TAP] after getDocumentPosition: ${_tapSw.elapsedMilliseconds}ms');
     editorGesturesLog.fine(" - tapped document position: $docPosition");
     if (docPosition == null) {
       editorGesturesLog.fine("No document content at ${details.globalPosition}.");
@@ -330,6 +336,8 @@ class _DocumentMouseInteractorState extends State<DocumentMouseInteractor> with 
       _selectionType = SelectionType.position;
       _selectPosition(docPosition);
     }
+    // ignore: avoid_print
+    print('[TAP] after execute/selectPosition: ${_tapSw.elapsedMilliseconds}ms');
   }
 
   void _onDoubleTapDown(TapDownDetails details) {
