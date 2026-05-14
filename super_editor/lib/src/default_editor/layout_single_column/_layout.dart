@@ -557,28 +557,94 @@ class _SingleColumnDocumentLayoutState extends State<SingleColumnDocumentLayout>
   }
 
   GlobalKey? _findComponentClosestToOffset(Offset documentOffset) {
+    if (_topToBottomComponentKeys.isEmpty) return null;
+
+    // Hoist the container box lookup so it is computed only once.
+    final containerBox = boxContext.findRenderObject() as RenderBox;
+
+    // Binary search over the top-to-bottom ordered key list.
+    // Components are laid out vertically with no overlap, so their y-ranges
+    // are monotonically non-decreasing — binary search is valid.
+    //
+    // Falls back to a linear scan if any render box in the search path is
+    // unavailable (e.g., during a build that hasn't settled yet).
+    int lo = 0;
+    int hi = _topToBottomComponentKeys.length - 1;
+    GlobalKey? lastAbove; // last component whose bottom is above the tap
+    GlobalKey? firstBelow; // first component whose top is below the tap
+
+    while (lo <= hi) {
+      final mid = (lo + hi) ~/ 2;
+      final key = _topToBottomComponentKeys[mid];
+      if (key.currentState is! DocumentComponent || key.currentContext == null) {
+        return _findComponentClosestToOffsetLinear(documentOffset, containerBox);
+      }
+      final componentBox = key.currentContext!.findRenderObject() as RenderBox?;
+      if (componentBox == null) {
+        return _findComponentClosestToOffsetLinear(documentOffset, containerBox);
+      }
+
+      final rect = _componentRectInContainer(componentBox, containerBox);
+      if (documentOffset.dy < rect.top) {
+        firstBelow = key;
+        hi = mid - 1;
+      } else if (documentOffset.dy > rect.bottom) {
+        lastAbove = key;
+        lo = mid + 1;
+      } else {
+        // dy is within this component's vertical range — exact hit.
+        return key;
+      }
+    }
+
+    // The tap landed in a gap between components; return the nearer one.
+    if (lastAbove == null) return firstBelow;
+    if (firstBelow == null) return lastAbove;
+
+    final aboveRect = _componentRectInContainer(
+        lastAbove.currentContext!.findRenderObject() as RenderBox, containerBox);
+    final belowRect = _componentRectInContainer(
+        firstBelow.currentContext!.findRenderObject() as RenderBox, containerBox);
+    return (documentOffset.dy - aboveRect.bottom) <= (belowRect.top - documentOffset.dy)
+        ? lastAbove
+        : firstBelow;
+  }
+
+  /// Linear fallback for [_findComponentClosestToOffset] used when a render
+  /// box is unavailable during the binary search (rare, e.g. mid-rebuild).
+  GlobalKey? _findComponentClosestToOffsetLinear(
+      Offset documentOffset, RenderBox containerBox) {
     GlobalKey? nearestComponentKey;
     double nearestDistance = double.infinity;
-    for (final componentKey in _nodeIdsToComponentKeys.values) {
-      if (componentKey.currentState is! DocumentComponent) {
-        continue;
-      }
-      if (componentKey.currentContext == null || componentKey.currentContext!.findRenderObject() == null) {
-        continue;
-      }
+    for (final componentKey in _topToBottomComponentKeys) {
+      if (componentKey.currentState is! DocumentComponent) continue;
+      if (componentKey.currentContext == null) continue;
+      final componentBox = componentKey.currentContext!.findRenderObject() as RenderBox?;
+      if (componentBox == null) continue;
 
-      final componentBox = componentKey.currentContext!.findRenderObject() as RenderBox;
-      if (_isOffsetInComponent(componentBox, documentOffset)) {
-        return componentKey;
-      }
+      final rect = _componentRectInContainer(componentBox, containerBox);
+      if (rect.contains(documentOffset)) return componentKey;
 
-      final distance = _getDistanceToComponent(componentBox, documentOffset);
+      final distance = _verticalDistanceToRect(rect, documentOffset.dy);
       if (distance < nearestDistance) {
         nearestDistance = distance;
         nearestComponentKey = componentKey;
       }
     }
     return nearestComponentKey;
+  }
+
+  /// Returns the bounding [Rect] of [componentBox] in [containerBox] coordinates.
+  Rect _componentRectInContainer(RenderBox componentBox, RenderBox containerBox) {
+    final offset = componentBox.localToGlobal(Offset.zero, ancestor: containerBox);
+    return offset & componentBox.size;
+  }
+
+  /// Returns the vertical distance from [dy] to [rect], or 0 if [dy] is inside.
+  double _verticalDistanceToRect(Rect rect, double dy) {
+    if (dy < rect.top) return rect.top - dy;
+    if (dy > rect.bottom) return dy - rect.bottom;
+    return 0;
   }
 
   /// Returns the [DocumentPosition] at the beginning of the first node or `null` if the document is empty.
@@ -613,18 +679,14 @@ class _SingleColumnDocumentLayoutState extends State<SingleColumnDocumentLayout>
 
   bool _isOffsetInComponent(RenderBox componentBox, Offset documentOffset) {
     final containerBox = boxContext.findRenderObject() as RenderBox;
-    final contentOffset = componentBox.localToGlobal(Offset.zero, ancestor: containerBox);
-    final contentRect = contentOffset & componentBox.size;
-
-    return contentRect.contains(documentOffset);
+    return _componentRectInContainer(componentBox, containerBox).contains(documentOffset);
   }
 
   /// Returns the vertical distance between the given [documentOffset] and the
   /// bounds of the given [componentBox].
   double _getDistanceToComponent(RenderBox componentBox, Offset documentOffset) {
     final documentLayoutBox = boxContext.findRenderObject() as RenderBox;
-    final componentOffset = componentBox.localToGlobal(Offset.zero, ancestor: documentLayoutBox);
-    final componentRect = componentOffset & componentBox.size;
+    final componentRect = _componentRectInContainer(componentBox, documentLayoutBox);
 
     if (documentOffset.dy < componentRect.top) {
       // The given offset is above the component's bounds.
