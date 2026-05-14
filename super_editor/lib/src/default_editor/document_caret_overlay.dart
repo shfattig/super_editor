@@ -113,8 +113,6 @@ class CaretDocumentOverlayState extends DocumentLayoutLayerState<CaretDocumentOv
   Duration get caretFlashPeriod => _blinkController.flashPeriod;
 
   void _onSelectionChange() {
-    // ignore: avoid_print
-    print('[CARET] _onSelectionChange at ${DateTime.now().millisecondsSinceEpoch % 100000}ms epoch');
     _updateCaretFlash();
 
     if (SchedulerBinding.instance.schedulerPhase != SchedulerPhase.persistentCallbacks) {
@@ -155,8 +153,6 @@ class CaretDocumentOverlayState extends DocumentLayoutLayerState<CaretDocumentOv
   @override
   Rect? computeLayoutDataWithDocumentLayout(
       BuildContext contentLayersContext, BuildContext documentContext, DocumentLayout documentLayout) {
-    // ignore: avoid_print
-    print('[CARET] computeLayoutDataWithDocumentLayout at ${DateTime.now().millisecondsSinceEpoch % 100000}ms epoch');
     final documentSelection = widget.composer.selection;
     if (documentSelection == null) {
       return null;

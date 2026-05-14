@@ -267,16 +267,12 @@ class _DocumentMouseInteractorState extends State<DocumentMouseInteractor> with 
         globalTopLeft.dx, globalTopLeft.dy, selectionExtentRectInDoc.width, selectionExtentRectInDoc.height);
   }
 
-  void _onTapUp(TapUpDetails details) {
-    editorGesturesLog.info("Tap up on document");
-    // ignore: avoid_print
-    final _tapSw = Stopwatch()..start();
+  void _onSingleTapDown(TapDownDetails details) {
+    editorGesturesLog.info("Tap down on document");
     final docOffset = _getDocOffsetFromGlobalOffset(details.globalPosition);
     editorGesturesLog.fine(" - document offset: $docOffset");
 
     _focusNode.requestFocus();
-    // ignore: avoid_print
-    print('[TAP] after requestFocus: ${_tapSw.elapsedMilliseconds}ms');
 
     if (widget.contentTapHandlers != null) {
       for (final handler in widget.contentTapHandlers!) {
@@ -288,16 +284,12 @@ class _DocumentMouseInteractorState extends State<DocumentMouseInteractor> with 
           ),
         );
         if (result == TapHandlingInstruction.halt) {
-          // The custom tap handler doesn't want us to react at all
-          // to the tap.
           return;
         }
       }
     }
 
     final docPosition = _docLayout.getDocumentPositionNearestToOffset(docOffset);
-    // ignore: avoid_print
-    print('[TAP] after getDocumentPosition: ${_tapSw.elapsedMilliseconds}ms');
     editorGesturesLog.fine(" - tapped document position: $docPosition");
     if (docPosition == null) {
       editorGesturesLog.fine("No document content at ${details.globalPosition}.");
@@ -318,8 +310,6 @@ class _DocumentMouseInteractorState extends State<DocumentMouseInteractor> with 
     }
 
     if (expandSelection) {
-      // The user tapped while pressing shift and there's an existing
-      // selection. Move the extent of the selection to where the user tapped.
       widget.editor.execute([
         ChangeSelectionRequest(
           _currentSelection!.copyWith(
@@ -331,13 +321,14 @@ class _DocumentMouseInteractorState extends State<DocumentMouseInteractor> with 
         const ClearComposingRegionRequest(),
       ]);
     } else {
-      // Place the document selection at the location where the
-      // user tapped.
       _selectionType = SelectionType.position;
       _selectPosition(docPosition);
     }
-    // ignore: avoid_print
-    print('[TAP] after execute/selectPosition: ${_tapSw.elapsedMilliseconds}ms');
+  }
+
+  void _onTapUp(TapUpDetails details) {
+    editorGesturesLog.info("Tap up on document");
+    // Cursor placement was already handled in _onSingleTapDown.
   }
 
   void _onDoubleTapDown(TapDownDetails details) {
@@ -835,6 +826,7 @@ Updating drag selection:
           () => TapSequenceGestureRecognizer(),
           (TapSequenceGestureRecognizer recognizer) {
             recognizer
+              ..onTapDown = _onSingleTapDown
               ..onTapUp = _onTapUp
               ..onDoubleTapDown = _onDoubleTapDown
               ..onDoubleTap = _onDoubleTap
