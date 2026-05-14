@@ -186,6 +186,7 @@ class ParagraphComponentViewModel extends SingleColumnLayoutComponentViewModel w
     required this.selectionColor,
     this.highlightWhenEmpty = false,
     this.computeInlineSpanOverride,
+    this.selectionNotifier,
     Set<CustomUnderline> customUnderlines = const <CustomUnderline>{},
     TextRange? composingRegion,
     bool showComposingRegionUnderline = false,
@@ -236,8 +237,16 @@ class ParagraphComponentViewModel extends SingleColumnLayoutComponentViewModel w
 
   /// Optional override for how the rich text span is computed.
   /// See [TextComponent.computeInlineSpanOverride].
-  InlineSpan Function(BuildContext context, AttributionStyleBuilder styleBuilder)?
-      computeInlineSpanOverride;
+  InlineSpan Function(
+    BuildContext context,
+    AttributionStyleBuilder styleBuilder,
+    bool isFocused,
+    int? cursorOffset,
+  )? computeInlineSpanOverride;
+
+  /// When set, passed directly to [TextComponent] for direct selection
+  /// subscription. See [TextComponent.selectionNotifier].
+  ValueListenable<DocumentSelection?>? selectionNotifier;
 
   @override
   ParagraphComponentViewModel copy() {
@@ -264,7 +273,8 @@ class ParagraphComponentViewModel extends SingleColumnLayoutComponentViewModel w
       ..indent = indent
       ..indentCalculator = indentCalculator
       ..textScaler = textScaler
-      ..computeInlineSpanOverride = computeInlineSpanOverride;
+      ..computeInlineSpanOverride = computeInlineSpanOverride
+      ..selectionNotifier = selectionNotifier;
 
     return copy;
   }
@@ -531,6 +541,8 @@ class _ParagraphComponentState extends State<ParagraphComponent>
               underlines: widget.viewModel.createUnderlines(),
               showDebugPaint: widget.showDebugPaint,
               computeInlineSpanOverride: widget.viewModel.computeInlineSpanOverride,
+              selectionNotifier: widget.viewModel.selectionNotifier,
+              nodeId: widget.viewModel.nodeId,
             ),
           ),
         ],

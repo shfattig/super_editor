@@ -797,6 +797,8 @@ class TextComponent extends StatefulWidget {
     this.underlines = const [],
     this.showDebugPaint = false,
     this.computeInlineSpanOverride,
+    this.selectionNotifier,
+    this.nodeId,
   }) : super(key: key);
 
   final AttributedText text;
@@ -845,8 +847,26 @@ class TextComponent extends StatefulWidget {
   ///
   /// Intended for custom components that need cursor-aware or context-aware text
   /// rendering (e.g. revealing/hiding markdown syntax markers based on cursor position).
-  final InlineSpan Function(BuildContext context, AttributionStyleBuilder styleBuilder)?
-      computeInlineSpanOverride;
+  ///
+  /// Receives [isFocused] (whether the cursor/selection is inside this node) and
+  /// [cursorOffset] (the collapsed cursor offset within this node's text, or null
+  /// for range selections or when unfocused). These signals drive cursor-reveal
+  /// features such as heading prefix visibility and inline formatting markers.
+  final InlineSpan Function(
+    BuildContext context,
+    AttributionStyleBuilder styleBuilder,
+    bool isFocused,
+    int? cursorOffset,
+  )? computeInlineSpanOverride;
+
+  /// When provided alongside [nodeId], [TextComponentState] subscribes directly
+  /// to this notifier and rebuilds when focus state changes for [nodeId] — in the
+  /// same frame as the caret, bypassing the presenter pipeline.
+  final ValueListenable<DocumentSelection?>? selectionNotifier;
+
+  /// The document node ID for this component. Required when [selectionNotifier]
+  /// is provided to identify whether a selection change affects this node.
+  final String? nodeId;
 
   @override
   TextComponentState createState() => TextComponentState();
@@ -1257,6 +1277,66 @@ class TextComponentState extends State<TextComponent> with DocumentComponent imp
 
   TextDirection? get textDirection => widget.textDirection;
 
+  // ---- Selection fast-path subscription ----
+  // When selectionNotifier + nodeId are provided, this state subscribes directly
+  // to the notifier and rebuilds when focus state changes — in the same frame as
+  // the caret, without waiting for the presenter pipeline.
+
+  bool _isFocused = false;
+  int? _cursorOffset;
+
+  @override
+  void initState() {
+    super.initState();
+    widget.selectionNotifier?.addListener(_onSelectionChange);
+    _updateFocusState();
+  }
+
+  @override
+  void didUpdateWidget(TextComponent oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.selectionNotifier != oldWidget.selectionNotifier) {
+      oldWidget.selectionNotifier?.removeListener(_onSelectionChange);
+      widget.selectionNotifier?.addListener(_onSelectionChange);
+      _updateFocusState();
+    }
+  }
+
+  @override
+  void dispose() {
+    widget.selectionNotifier?.removeListener(_onSelectionChange);
+    super.dispose();
+  }
+
+  void _onSelectionChange() {
+    final wasFocused = _isFocused;
+    final wasOffset = _cursorOffset;
+    _updateFocusState();
+    if (_isFocused != wasFocused || _cursorOffset != wasOffset) {
+      setState(() {});
+    }
+  }
+
+  void _updateFocusState() {
+    final sel = widget.selectionNotifier?.value;
+    final id = widget.nodeId;
+    if (sel == null || id == null) {
+      _isFocused = false;
+      _cursorOffset = null;
+      return;
+    }
+    _isFocused =
+        sel.base.nodeId == id || sel.extent.nodeId == id;
+    if (_isFocused && sel.isCollapsed) {
+      final pos = sel.extent.nodePosition;
+      _cursorOffset = pos is TextNodePosition ? pos.offset : null;
+    } else {
+      _cursorOffset = null;
+    }
+  }
+
+  // ------------------------------------------
+
   @override
   Widget build(BuildContext context) {
     editorLayoutLog.finer('Building a TextComponent with key: ${widget.key}');
@@ -1265,7 +1345,8 @@ class TextComponentState extends State<TextComponent> with DocumentComponent imp
       child: SuperText(
         key: _textKey,
         richText: widget.computeInlineSpanOverride != null
-            ? widget.computeInlineSpanOverride!(context, _textStyleWithBlockType)
+            ? widget.computeInlineSpanOverride!(
+                context, _textStyleWithBlockType, _isFocused, _cursorOffset)
             : widget.text.computeInlineSpan(
                 context,
                 _textStyleWithBlockType,
