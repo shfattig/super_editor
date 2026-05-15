@@ -800,6 +800,8 @@ class TextComponent extends StatefulWidget {
     this.computeInlineSpanOverride,
     this.selectionNotifier,
     this.nodeId,
+    this.rawToWorkingOffset,
+    this.workingToRawOffset,
   }) : super(key: key);
 
   final AttributedText text;
@@ -869,6 +871,14 @@ class TextComponent extends StatefulWidget {
   /// is provided to identify whether a selection change affects this node.
   final String? nodeId;
 
+  /// Maps a raw-string offset to the working-text offset used by the text
+  /// layout engine. The second argument is the current raw cursor offset (null
+  /// when unfocused). When null, raw == working.
+  final int Function(int rawOffset, int? cursorRawOffset)? rawToWorkingOffset;
+
+  /// Inverse of [rawToWorkingOffset]. When null, working == raw.
+  final int Function(int workingOffset, int? cursorRawOffset)? workingToRawOffset;
+
   @override
   TextComponentState createState() => TextComponentState();
 }
@@ -889,6 +899,10 @@ class TextComponentState extends State<TextComponent> with DocumentComponent imp
     //       right for them.
     final textPosition = textLayout.getPositionNearestToOffset(localOffset);
 
+    if (widget.workingToRawOffset != null) {
+      final rawOffset = widget.workingToRawOffset!(textPosition.offset, _cursorOffset);
+      return TextNodePosition(offset: rawOffset, affinity: textPosition.affinity);
+    }
     return TextNodePosition.fromTextPosition(textPosition);
   }
 
@@ -896,6 +910,13 @@ class TextComponentState extends State<TextComponent> with DocumentComponent imp
   Offset getOffsetForPosition(dynamic nodePosition) {
     if (nodePosition is! TextPosition) {
       throw Exception('Expected nodePosition of type TextPosition but received: $nodePosition');
+    }
+    if (widget.rawToWorkingOffset != null) {
+      final workingPos = TextPosition(
+        offset: widget.rawToWorkingOffset!(nodePosition.offset, _cursorOffset),
+        affinity: nodePosition.affinity,
+      );
+      return textLayout.getOffsetAtPosition(workingPos);
     }
     return textLayout.getOffsetAtPosition(nodePosition);
   }
@@ -919,7 +940,13 @@ class TextComponentState extends State<TextComponent> with DocumentComponent imp
     }
 
     final offset = getOffsetForPosition(nodePosition);
-    final lineHeight = textLayout.getHeightForCaret(nodePosition) ?? textLayout.getLineHeightAtPosition(nodePosition);
+    final workingPos = widget.rawToWorkingOffset != null
+        ? TextPosition(
+            offset: widget.rawToWorkingOffset!(nodePosition.offset, _cursorOffset),
+            affinity: nodePosition.affinity,
+          )
+        : nodePosition;
+    final lineHeight = textLayout.getHeightForCaret(workingPos) ?? textLayout.getLineHeightAtPosition(workingPos);
     return Rect.fromLTWH(offset.dx, offset.dy, 0, lineHeight);
   }
 
@@ -932,9 +959,11 @@ class TextComponentState extends State<TextComponent> with DocumentComponent imp
       throw Exception('Expected nodePosition of type TextPosition but received: $extentNodePosition');
     }
 
+    final workingBase = _toWorkingPosition(baseNodePosition);
+    final workingExtent = _toWorkingPosition(extentNodePosition);
     final selection = TextSelection(
-      baseOffset: baseNodePosition.offset,
-      extentOffset: extentNodePosition.offset,
+      baseOffset: workingBase.offset,
+      extentOffset: workingExtent.offset,
     );
 
     if (selection.isCollapsed) {
@@ -947,7 +976,7 @@ class TextComponentState extends State<TextComponent> with DocumentComponent imp
         return rectForPosition;
       }
 
-      TextBox? characterBox = textLayout.getCharacterBox(extentNodePosition);
+      TextBox? characterBox = textLayout.getCharacterBox(workingExtent);
       if (characterBox != null) {
         final rect = characterBox.toRect();
         return Rect.fromLTWH(rect.left, rect.top, 0, rect.height);
@@ -955,8 +984,8 @@ class TextComponentState extends State<TextComponent> with DocumentComponent imp
 
       // We didn't find a character at the given offset. That offset might be at the end
       // of the text. Try looking one character upstream.
-      characterBox = extentNodePosition.offset > 0
-          ? textLayout.getCharacterBox(TextPosition(offset: extentNodePosition.offset - 1))
+      characterBox = workingExtent.offset > 0
+          ? textLayout.getCharacterBox(TextPosition(offset: workingExtent.offset - 1))
           : null;
       if (characterBox != null) {
         final rect = characterBox.toRect();
@@ -968,7 +997,7 @@ class TextComponentState extends State<TextComponent> with DocumentComponent imp
 
       // We couldn't find a character box, which means the text is empty. Return
       // the caret height, or the estimated line height.
-      final caretHeight = textLayout.getHeightForCaret(selection.extent);
+      final caretHeight = textLayout.getHeightForCaret(workingExtent);
       return caretHeight != null
           ? Rect.fromLTWH(0, 0, 0, caretHeight)
           : Rect.fromLTWH(0, 0, 0, textLayout.estimatedLineHeight);
@@ -1222,9 +1251,16 @@ class TextComponentState extends State<TextComponent> with DocumentComponent imp
       throw Exception('Expected position of type NodePosition but received ${textPosition.runtimeType}');
     }
 
-    final positionOneLineUp = textLayout.getPositionOneLineUp(textPosition);
+    final workingPosition = _toWorkingPosition(textPosition);
+    final positionOneLineUp = textLayout.getPositionOneLineUp(workingPosition);
     if (positionOneLineUp == null) {
       return null;
+    }
+    if (widget.workingToRawOffset != null) {
+      return TextNodePosition(
+        offset: widget.workingToRawOffset!(positionOneLineUp.offset, _cursorOffset),
+        affinity: positionOneLineUp.affinity,
+      );
     }
     return TextNodePosition.fromTextPosition(positionOneLineUp);
   }
@@ -1235,25 +1271,44 @@ class TextComponentState extends State<TextComponent> with DocumentComponent imp
       throw Exception('Expected position of type NodePosition but received ${textPosition.runtimeType}');
     }
 
-    final positionOneLineDown = textLayout.getPositionOneLineDown(textPosition);
+    final workingPosition = _toWorkingPosition(textPosition);
+    final positionOneLineDown = textLayout.getPositionOneLineDown(workingPosition);
     if (positionOneLineDown == null) {
       return null;
+    }
+    if (widget.workingToRawOffset != null) {
+      return TextNodePosition(
+        offset: widget.workingToRawOffset!(positionOneLineDown.offset, _cursorOffset),
+        affinity: positionOneLineDown.affinity,
+      );
     }
     return TextNodePosition.fromTextPosition(positionOneLineDown);
   }
 
   @override
   TextNodePosition getPositionAtEndOfLine(TextNodePosition textPosition) {
-    return TextNodePosition.fromTextPosition(
-      textLayout.getPositionAtEndOfLine(textPosition),
-    );
+    final workingPosition = _toWorkingPosition(textPosition);
+    final result = textLayout.getPositionAtEndOfLine(workingPosition);
+    if (widget.workingToRawOffset != null) {
+      return TextNodePosition(
+        offset: widget.workingToRawOffset!(result.offset, _cursorOffset),
+        affinity: result.affinity,
+      );
+    }
+    return TextNodePosition.fromTextPosition(result);
   }
 
   @override
   TextNodePosition getPositionAtStartOfLine(TextNodePosition textNodePosition) {
-    return TextNodePosition.fromTextPosition(
-      textLayout.getPositionAtStartOfLine(textNodePosition),
-    );
+    final workingPosition = _toWorkingPosition(textNodePosition);
+    final result = textLayout.getPositionAtStartOfLine(workingPosition);
+    if (widget.workingToRawOffset != null) {
+      return TextNodePosition(
+        offset: widget.workingToRawOffset!(result.offset, _cursorOffset),
+        affinity: result.affinity,
+      );
+    }
+    return TextNodePosition.fromTextPosition(result);
   }
 
   /// Return the [TextStyle] for the character at [offset].
@@ -1336,6 +1391,24 @@ class TextComponentState extends State<TextComponent> with DocumentComponent imp
     }
   }
 
+  /// Converts [rawSel] from raw-string coordinates to working-text coordinates.
+  /// Returns [rawSel] unchanged when [widget.rawToWorkingOffset] is null.
+  TextSelection? _toWorkingSelection(TextSelection? rawSel) {
+    if (rawSel == null || widget.rawToWorkingOffset == null) return rawSel;
+    return rawSel.copyWith(
+      baseOffset: widget.rawToWorkingOffset!(rawSel.baseOffset, _cursorOffset),
+      extentOffset: widget.rawToWorkingOffset!(rawSel.extentOffset, _cursorOffset),
+    );
+  }
+
+  TextPosition _toWorkingPosition(TextPosition rawPos) {
+    if (widget.rawToWorkingOffset == null) return rawPos;
+    return TextPosition(
+      offset: widget.rawToWorkingOffset!(rawPos.offset, _cursorOffset),
+      affinity: rawPos.affinity,
+    );
+  }
+
   // ------------------------------------------
 
   @override
@@ -1357,6 +1430,7 @@ class TextComponentState extends State<TextComponent> with DocumentComponent imp
         textDirection: widget.textDirection ?? TextDirection.ltr,
         textScaler: widget.textScaler ?? MediaQuery.textScalerOf(context),
         layerBeneathBuilder: (context, textLayout) {
+          final workingSelection = _toWorkingSelection(widget.textSelection);
           return Stack(
             children: [
               // Selection highlight beneath the text.
@@ -1366,7 +1440,7 @@ class TextComponentState extends State<TextComponent> with DocumentComponent imp
                   style: SelectionHighlightStyle(
                     color: widget.selectionColor,
                   ),
-                  selection: widget.textSelection ?? const TextSelection.collapsed(offset: -1),
+                  selection: workingSelection ?? const TextSelection.collapsed(offset: -1),
                 )
               else if (widget.highlightWhenEmpty)
                 TextLayoutEmptyHighlight(

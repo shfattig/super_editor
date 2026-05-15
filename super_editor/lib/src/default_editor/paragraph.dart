@@ -249,6 +249,19 @@ class ParagraphComponentViewModel extends SingleColumnLayoutComponentViewModel w
   /// subscription. See [TextComponent.selectionNotifier].
   ValueListenable<DocumentSelection?>? selectionNotifier;
 
+  /// Maps a raw-string offset to the corresponding working-text offset, given
+  /// the current collapsed cursor position in raw coordinates.
+  ///
+  /// Used by [TextComponent] to translate [selection] and cursor positions
+  /// into working-text coordinates when some inline markers are hidden.
+  /// When null, raw == working (no remapping needed).
+  int Function(int rawOffset, int? cursorRawOffset)? rawToWorkingOffset;
+
+  /// Inverse of [rawToWorkingOffset]: maps a working-text offset back to the
+  /// raw-string offset. Used by [TextComponent.getPositionAtOffset] so that
+  /// click positions are returned in raw coordinates.
+  int Function(int workingOffset, int? cursorRawOffset)? workingToRawOffset;
+
   @override
   ParagraphComponentViewModel copy() {
     final copy = internalCopy(
@@ -275,7 +288,9 @@ class ParagraphComponentViewModel extends SingleColumnLayoutComponentViewModel w
       ..indentCalculator = indentCalculator
       ..textScaler = textScaler
       ..computeInlineSpanOverride = computeInlineSpanOverride
-      ..selectionNotifier = selectionNotifier;
+      ..selectionNotifier = selectionNotifier
+      ..rawToWorkingOffset = rawToWorkingOffset
+      ..workingToRawOffset = workingToRawOffset;
 
     return copy;
   }
@@ -544,6 +559,8 @@ class _ParagraphComponentState extends State<ParagraphComponent>
               computeInlineSpanOverride: widget.viewModel.computeInlineSpanOverride,
               selectionNotifier: widget.viewModel.selectionNotifier,
               nodeId: widget.viewModel.nodeId,
+              rawToWorkingOffset: widget.viewModel.rawToWorkingOffset,
+              workingToRawOffset: widget.viewModel.workingToRawOffset,
             ),
           ),
         ],
