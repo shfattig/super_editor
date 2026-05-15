@@ -243,24 +243,27 @@ class ParagraphComponentViewModel extends SingleColumnLayoutComponentViewModel w
     AttributionStyleBuilder styleBuilder,
     bool isFocused,
     int? cursorOffset,
+    TextSelection? nodeSelection,
   )? computeInlineSpanOverride;
 
   /// When set, passed directly to [TextComponent] for direct selection
   /// subscription. See [TextComponent.selectionNotifier].
   ValueListenable<DocumentSelection?>? selectionNotifier;
 
-  /// Maps a raw-string offset to the corresponding working-text offset, given
-  /// the current collapsed cursor position in raw coordinates.
+  /// Maps a raw-string offset to the corresponding working-text offset.
+  ///
+  /// [cursorRawOffset] is the collapsed cursor position (null when non-collapsed).
+  /// [nodeSelection] is the full raw selection within this node (null when unfocused).
   ///
   /// Used by [TextComponent] to translate [selection] and cursor positions
   /// into working-text coordinates when some inline markers are hidden.
   /// When null, raw == working (no remapping needed).
-  int Function(int rawOffset, int? cursorRawOffset)? rawToWorkingOffset;
+  int Function(int rawOffset, int? cursorRawOffset, TextSelection? nodeSelection)? rawToWorkingOffset;
 
   /// Inverse of [rawToWorkingOffset]: maps a working-text offset back to the
   /// raw-string offset. Used by [TextComponent.getPositionAtOffset] so that
   /// click positions are returned in raw coordinates.
-  int Function(int workingOffset, int? cursorRawOffset)? workingToRawOffset;
+  int Function(int workingOffset, int? cursorRawOffset, TextSelection? nodeSelection)? workingToRawOffset;
 
   @override
   ParagraphComponentViewModel copy() {

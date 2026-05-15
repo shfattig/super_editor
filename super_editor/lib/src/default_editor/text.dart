@@ -853,13 +853,16 @@ class TextComponent extends StatefulWidget {
   ///
   /// Receives [isFocused] (whether the cursor/selection is inside this node) and
   /// [cursorOffset] (the collapsed cursor offset within this node's text, or null
-  /// for range selections or when unfocused). These signals drive cursor-reveal
-  /// features such as heading prefix visibility and inline formatting markers.
+  /// for range selections or when unfocused). [nodeSelection] carries the full raw
+  /// selection within this node (non-null when focused; collapsed when cursor-only).
+  /// These signals drive cursor-reveal features such as heading prefix visibility
+  /// and inline formatting markers.
   final InlineSpan Function(
     BuildContext context,
     AttributionStyleBuilder styleBuilder,
     bool isFocused,
     int? cursorOffset,
+    TextSelection? nodeSelection,
   )? computeInlineSpanOverride;
 
   /// When provided alongside [nodeId], [TextComponentState] subscribes directly
@@ -872,12 +875,13 @@ class TextComponent extends StatefulWidget {
   final String? nodeId;
 
   /// Maps a raw-string offset to the working-text offset used by the text
-  /// layout engine. The second argument is the current raw cursor offset (null
-  /// when unfocused). When null, raw == working.
-  final int Function(int rawOffset, int? cursorRawOffset)? rawToWorkingOffset;
+  /// layout engine. [cursorRawOffset] is the collapsed cursor (null when
+  /// non-collapsed or unfocused). [nodeSelection] is the full raw selection
+  /// within this node. When null, raw == working.
+  final int Function(int rawOffset, int? cursorRawOffset, TextSelection? nodeSelection)? rawToWorkingOffset;
 
   /// Inverse of [rawToWorkingOffset]. When null, working == raw.
-  final int Function(int workingOffset, int? cursorRawOffset)? workingToRawOffset;
+  final int Function(int workingOffset, int? cursorRawOffset, TextSelection? nodeSelection)? workingToRawOffset;
 
   @override
   TextComponentState createState() => TextComponentState();
@@ -900,7 +904,7 @@ class TextComponentState extends State<TextComponent> with DocumentComponent imp
     final textPosition = textLayout.getPositionNearestToOffset(localOffset);
 
     if (widget.workingToRawOffset != null) {
-      final rawOffset = widget.workingToRawOffset!(textPosition.offset, _cursorOffset);
+      final rawOffset = widget.workingToRawOffset!(textPosition.offset, _cursorOffset, _nodeSelection);
       return TextNodePosition(offset: rawOffset, affinity: textPosition.affinity);
     }
     return TextNodePosition.fromTextPosition(textPosition);
@@ -913,7 +917,7 @@ class TextComponentState extends State<TextComponent> with DocumentComponent imp
     }
     if (widget.rawToWorkingOffset != null) {
       final workingPos = TextPosition(
-        offset: widget.rawToWorkingOffset!(nodePosition.offset, _cursorOffset),
+        offset: widget.rawToWorkingOffset!(nodePosition.offset, _cursorOffset, _nodeSelection),
         affinity: nodePosition.affinity,
       );
       return textLayout.getOffsetAtPosition(workingPos);
@@ -942,7 +946,7 @@ class TextComponentState extends State<TextComponent> with DocumentComponent imp
     final offset = getOffsetForPosition(nodePosition);
     final workingPos = widget.rawToWorkingOffset != null
         ? TextPosition(
-            offset: widget.rawToWorkingOffset!(nodePosition.offset, _cursorOffset),
+            offset: widget.rawToWorkingOffset!(nodePosition.offset, _cursorOffset, _nodeSelection),
             affinity: nodePosition.affinity,
           )
         : nodePosition;
@@ -1258,7 +1262,7 @@ class TextComponentState extends State<TextComponent> with DocumentComponent imp
     }
     if (widget.workingToRawOffset != null) {
       return TextNodePosition(
-        offset: widget.workingToRawOffset!(positionOneLineUp.offset, _cursorOffset),
+        offset: widget.workingToRawOffset!(positionOneLineUp.offset, _cursorOffset, _nodeSelection),
         affinity: positionOneLineUp.affinity,
       );
     }
@@ -1278,7 +1282,7 @@ class TextComponentState extends State<TextComponent> with DocumentComponent imp
     }
     if (widget.workingToRawOffset != null) {
       return TextNodePosition(
-        offset: widget.workingToRawOffset!(positionOneLineDown.offset, _cursorOffset),
+        offset: widget.workingToRawOffset!(positionOneLineDown.offset, _cursorOffset, _nodeSelection),
         affinity: positionOneLineDown.affinity,
       );
     }
@@ -1291,7 +1295,7 @@ class TextComponentState extends State<TextComponent> with DocumentComponent imp
     final result = textLayout.getPositionAtEndOfLine(workingPosition);
     if (widget.workingToRawOffset != null) {
       return TextNodePosition(
-        offset: widget.workingToRawOffset!(result.offset, _cursorOffset),
+        offset: widget.workingToRawOffset!(result.offset, _cursorOffset, _nodeSelection),
         affinity: result.affinity,
       );
     }
@@ -1304,7 +1308,7 @@ class TextComponentState extends State<TextComponent> with DocumentComponent imp
     final result = textLayout.getPositionAtStartOfLine(workingPosition);
     if (widget.workingToRawOffset != null) {
       return TextNodePosition(
-        offset: widget.workingToRawOffset!(result.offset, _cursorOffset),
+        offset: widget.workingToRawOffset!(result.offset, _cursorOffset, _nodeSelection),
         affinity: result.affinity,
       );
     }
@@ -1340,6 +1344,9 @@ class TextComponentState extends State<TextComponent> with DocumentComponent imp
 
   bool _isFocused = false;
   int? _cursorOffset;
+  /// The focused selection within this node's raw text.
+  /// Collapsed when cursor-only; non-collapsed when there is a range selection.
+  TextSelection? _nodeSelection;
 
   @override
   void initState() {
@@ -1367,8 +1374,9 @@ class TextComponentState extends State<TextComponent> with DocumentComponent imp
   void _onSelectionChange() {
     final wasFocused = _isFocused;
     final wasOffset = _cursorOffset;
+    final wasSelection = _nodeSelection;
     _updateFocusState();
-    if (_isFocused != wasFocused || _cursorOffset != wasOffset) {
+    if (_isFocused != wasFocused || _cursorOffset != wasOffset || _nodeSelection != wasSelection) {
       setState(() {});
     }
   }
@@ -1379,15 +1387,28 @@ class TextComponentState extends State<TextComponent> with DocumentComponent imp
     if (sel == null || id == null) {
       _isFocused = false;
       _cursorOffset = null;
+      _nodeSelection = null;
       return;
     }
-    _isFocused =
-        sel.base.nodeId == id || sel.extent.nodeId == id;
+    _isFocused = sel.base.nodeId == id || sel.extent.nodeId == id;
     if (_isFocused && sel.isCollapsed) {
       final pos = sel.extent.nodePosition;
-      _cursorOffset = pos is TextNodePosition ? pos.offset : null;
+      final offset = pos is TextNodePosition ? pos.offset : null;
+      _cursorOffset = offset;
+      _nodeSelection = offset != null ? TextSelection.collapsed(offset: offset) : null;
+    } else if (_isFocused) {
+      _cursorOffset = null;
+      // Compute the selection range within this node only (both ends must be here).
+      final basePos = sel.base.nodeId == id ? sel.base.nodePosition : null;
+      final extentPos = sel.extent.nodeId == id ? sel.extent.nodePosition : null;
+      final baseOff = basePos is TextNodePosition ? basePos.offset : null;
+      final extentOff = extentPos is TextNodePosition ? extentPos.offset : null;
+      _nodeSelection = (baseOff != null && extentOff != null)
+          ? TextSelection(baseOffset: baseOff, extentOffset: extentOff)
+          : null;
     } else {
       _cursorOffset = null;
+      _nodeSelection = null;
     }
   }
 
@@ -1396,15 +1417,15 @@ class TextComponentState extends State<TextComponent> with DocumentComponent imp
   TextSelection? _toWorkingSelection(TextSelection? rawSel) {
     if (rawSel == null || widget.rawToWorkingOffset == null) return rawSel;
     return rawSel.copyWith(
-      baseOffset: widget.rawToWorkingOffset!(rawSel.baseOffset, _cursorOffset),
-      extentOffset: widget.rawToWorkingOffset!(rawSel.extentOffset, _cursorOffset),
+      baseOffset: widget.rawToWorkingOffset!(rawSel.baseOffset, _cursorOffset, _nodeSelection),
+      extentOffset: widget.rawToWorkingOffset!(rawSel.extentOffset, _cursorOffset, _nodeSelection),
     );
   }
 
   TextPosition _toWorkingPosition(TextPosition rawPos) {
     if (widget.rawToWorkingOffset == null) return rawPos;
     return TextPosition(
-      offset: widget.rawToWorkingOffset!(rawPos.offset, _cursorOffset),
+      offset: widget.rawToWorkingOffset!(rawPos.offset, _cursorOffset, _nodeSelection),
       affinity: rawPos.affinity,
     );
   }
@@ -1420,7 +1441,7 @@ class TextComponentState extends State<TextComponent> with DocumentComponent imp
         key: _textKey,
         richText: widget.computeInlineSpanOverride != null
             ? widget.computeInlineSpanOverride!(
-                context, _textStyleWithBlockType, _isFocused, _cursorOffset)
+                context, _textStyleWithBlockType, _isFocused, _cursorOffset, _nodeSelection)
             : widget.text.computeInlineSpan(
                 context,
                 _textStyleWithBlockType,
