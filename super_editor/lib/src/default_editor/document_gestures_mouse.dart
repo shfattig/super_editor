@@ -797,9 +797,6 @@ Updating drag selection:
       children: [
         Listener(
           onPointerHover: _onMouseMove,
-          onPointerDown: (_) => _isPointerDown.value = true,
-          onPointerUp: (_) => _isPointerDown.value = false,
-          onPointerCancel: (_) => _isPointerDown.value = false,
           child: _buildCursorStyle(
             child: _buildGestureInput(
               child: const SizedBox(),
@@ -865,7 +862,13 @@ Updating drag selection:
           },
         ),
       },
-      child: child,
+      child: Listener(
+        behavior: HitTestBehavior.translucent,
+        onPointerDown: (_) => _isPointerDown.value = true,
+        onPointerUp: (_) => _isPointerDown.value = false,
+        onPointerCancel: (_) => _isPointerDown.value = false,
+        child: child,
+      ),
     );
   }
 }
