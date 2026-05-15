@@ -1377,6 +1377,11 @@ class TextComponentState extends State<TextComponent> with DocumentComponent imp
   /// (touch interactors, unit tests).
   ValueNotifier<bool>? _pointerDownNotifier;
 
+  /// Timestamp of the most recent pointer-down event. Used in [_onSelectionChange]
+  /// to distinguish a fast tap (pointer went down and up before the selection
+  /// update arrived — same frame) from keyboard navigation (no recent pointer).
+  DateTime? _lastPointerDownTime;
+
   // ---- Effective values passed to overrides and offset callbacks ----
   //
   // Three states:
@@ -1449,6 +1454,7 @@ class TextComponentState extends State<TextComponent> with DocumentComponent imp
   void _onPointerStateChanged() {
     final isDown = _pointerDownNotifier?.value == true;
     if (isDown) {
+      _lastPointerDownTime = DateTime.now();
       _tapRevealTimer?.cancel();
       _tapRevealTimer = null;
       return;
@@ -1456,14 +1462,19 @@ class TextComponentState extends State<TextComponent> with DocumentComponent imp
     // Pointer released.
     if (!_isFocused) return;
     if (_nodeSelection != null && !_nodeSelection!.isCollapsed) {
-      // Drag or double-click selection completed: reveal all spans in selection.
+      // Drag or double-click selection completed: reveal all spans in selection
+      // and allow heading reveal too.
       _selectionFinalizeTimer?.cancel();
       _selectionFinalizeTimer = null;
-      if (!_nodeSelectionFinalized) {
-        setState(() { _nodeSelectionFinalized = true; });
+      if (!_nodeSelectionFinalized || _isFirstFocus) {
+        setState(() {
+          _isFirstFocus = false;
+          _nodeSelectionFinalized = true;
+        });
       }
     } else if (_isFirstFocus) {
-      // Single tap: wait for potential double-click before revealing markers.
+      // Single tap confirmed (pointer released, no drag): start dwell timer to
+      // wait for a potential double-click before revealing markers.
       _tapRevealTimer?.cancel();
       _tapRevealTimer = Timer(_kTapRevealDelay, () {
         if (mounted) setState(() { _isFirstFocus = false; });
@@ -1479,12 +1490,46 @@ class TextComponentState extends State<TextComponent> with DocumentComponent imp
     final wasFirstFocus = _isFirstFocus;
     _updateFocusState();
     _updateFinalizeState(wasSelection);
+    _recoverFastTapOrKeyboard(wasFocused);
     if (_isFocused != wasFocused ||
         _cursorOffset != wasOffset ||
         _nodeSelection != wasSelection ||
         _nodeSelectionFinalized != wasFinalized ||
         _isFirstFocus != wasFirstFocus) {
       setState(() {});
+    }
+  }
+
+  /// Handles cursor-reveal timing for two cases that [_onPointerStateChanged]
+  /// cannot detect on its own:
+  ///
+  /// **Fast tap**: pointer-down and pointer-up both arrive in the same frame
+  /// before the selection update fires, so [_onPointerStateChanged] saw
+  /// `_isFocused == false` on pointer-up and skipped. Here we detect the
+  /// pattern via [_lastPointerDownTime] and start the dwell timer.
+  ///
+  /// **Keyboard navigation**: cursor entered the node with no recent pointer
+  /// event. Reveal markers immediately (no dwell needed).
+  void _recoverFastTapOrKeyboard(bool wasFocused) {
+    if (_pointerDownNotifier == null) return; // handled elsewhere
+    if (!(!wasFocused && _isFocused && _isFirstFocus)) return; // not a fresh entry
+
+    if (_pointerDownNotifier!.value) return; // pointer still down — wait for _onPointerStateChanged
+
+    // Pointer is up. Was there a recent pointer-down (fast tap) or was this keyboard?
+    final lastDown = _lastPointerDownTime;
+    final isRecentPointerEvent = lastDown != null &&
+        DateTime.now().difference(lastDown).inMilliseconds < 500;
+
+    if (isRecentPointerEvent) {
+      // Fast tap: pointer went down + up before selection arrived. Start dwell timer.
+      _tapRevealTimer?.cancel();
+      _tapRevealTimer = Timer(_kTapRevealDelay, () {
+        if (mounted) setState(() { _isFirstFocus = false; });
+      });
+    } else {
+      // Keyboard or programmatic navigation: reveal immediately.
+      _isFirstFocus = false;
     }
   }
 
@@ -1505,7 +1550,10 @@ class TextComponentState extends State<TextComponent> with DocumentComponent imp
       // shift-selection (no pointer-up events).
       if (_pointerDownNotifier == null) {
         _selectionFinalizeTimer = Timer(_kFinalizeDelay, () {
-          if (mounted) setState(() { _nodeSelectionFinalized = true; });
+          if (mounted) setState(() {
+            _isFirstFocus = false;
+            _nodeSelectionFinalized = true;
+          });
         });
       }
     }
@@ -1565,13 +1613,11 @@ class TextComponentState extends State<TextComponent> with DocumentComponent imp
       _tapRevealTimer?.cancel();
       _tapRevealTimer = null;
     } else if (!wasFocused) {
-      if (_pointerDownNotifier?.value == true) {
-        // Pointer is held down — suppress reveal until pointer-up.
-        _isFirstFocus = true;
-      } else {
-        // Keyboard navigation — reveal adjacent markers immediately.
-        _isFirstFocus = false;
-      }
+      // Always suppress on fresh entry when under a mouse interactor.
+      // _recoverFastTapOrKeyboard (called from _onSelectionChange) will
+      // determine whether to reveal immediately (keyboard) or start the
+      // dwell timer (fast tap / slow tap handled by _onPointerStateChanged).
+      _isFirstFocus = (_pointerDownNotifier != null);
     }
     // If wasFocused && _isFocused: _isFirstFocus is left unchanged.
     // Once markers are revealed (_isFirstFocus = false), they stay revealed
