@@ -31,6 +31,7 @@ import 'package:super_text_layout/super_text_layout.dart';
 import 'layout_single_column/layout_single_column.dart';
 import 'multi_node_editing.dart';
 import 'paragraph.dart';
+import 'selection_drag_scope.dart';
 import 'selection_upstream_downstream.dart';
 import 'text_tools.dart';
 
@@ -1355,11 +1356,16 @@ class TextComponentState extends State<TextComponent> with DocumentComponent imp
   /// drag, without revealing new spans mid-drag.
   int? _selectionStartCursorOffset;
 
-  /// True once a non-collapsed selection has been stable for [_kFinalizeDelay].
-  /// Only after finalization are selection-overlapping spans revealed.
+  /// True once a non-collapsed selection has been finalized (pointer released
+  /// or stable for [_kFinalizeDelay]). Only then are selection-overlapping spans revealed.
   bool _nodeSelectionFinalized = false;
   Timer? _selectionFinalizeTimer;
   static const _kFinalizeDelay = Duration(milliseconds: 100);
+
+  /// Subscribed via [SelectionDragScope] to detect pointer-up without
+  /// requiring parameter threading from the app layer. Null when not under
+  /// a [DocumentMouseInteractor] (e.g., touch, unit tests).
+  ValueNotifier<bool>? _dragNotifier;
 
   // ---- Effective values passed to overrides and offset callbacks ----
   //
@@ -1386,6 +1392,17 @@ class TextComponentState extends State<TextComponent> with DocumentComponent imp
   }
 
   @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final newDragNotifier = SelectionDragScope.maybeOf(context);
+    if (newDragNotifier != _dragNotifier) {
+      _dragNotifier?.removeListener(_onDragFinalized);
+      _dragNotifier = newDragNotifier;
+      _dragNotifier?.addListener(_onDragFinalized);
+    }
+  }
+
+  @override
   void didUpdateWidget(TextComponent oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (widget.selectionNotifier != oldWidget.selectionNotifier) {
@@ -1398,8 +1415,26 @@ class TextComponentState extends State<TextComponent> with DocumentComponent imp
   @override
   void dispose() {
     _selectionFinalizeTimer?.cancel();
+    _dragNotifier?.removeListener(_onDragFinalized);
     widget.selectionNotifier?.removeListener(_onSelectionChange);
     super.dispose();
+  }
+
+  /// Called when [_dragNotifier] changes value.
+  ///
+  /// When the value goes `false` (pointer released), immediately finalizes
+  /// the selection reveal for any pending non-collapsed selection.
+  void _onDragFinalized() {
+    if (_dragNotifier?.value == false &&
+        _nodeSelection != null &&
+        !_nodeSelection!.isCollapsed &&
+        !_nodeSelectionFinalized) {
+      _selectionFinalizeTimer?.cancel();
+      _selectionFinalizeTimer = null;
+      setState(() {
+        _nodeSelectionFinalized = true;
+      });
+    }
   }
 
   void _onSelectionChange() {
@@ -1425,13 +1460,18 @@ class TextComponentState extends State<TextComponent> with DocumentComponent imp
       _nodeSelectionFinalized = false;
       return;
     }
-    // Non-collapsed selection: restart debounce timer whenever it changes.
+    // Non-collapsed selection: reset finalization whenever the selection changes.
     if (_nodeSelection != prevSelection) {
       _nodeSelectionFinalized = false;
       _selectionFinalizeTimer?.cancel();
-      _selectionFinalizeTimer = Timer(_kFinalizeDelay, () {
-        if (mounted) setState(() { _nodeSelectionFinalized = true; });
-      });
+      // When under a mouse interactor, [_onDragFinalized] handles finalization
+      // on pointer-up. Fall back to a debounce timer for keyboard shift-selection
+      // (which has no pointer-up event).
+      if (_dragNotifier == null) {
+        _selectionFinalizeTimer = Timer(_kFinalizeDelay, () {
+          if (mounted) setState(() { _nodeSelectionFinalized = true; });
+        });
+      }
     }
   }
 

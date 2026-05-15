@@ -21,6 +21,7 @@ import 'package:super_editor/src/infrastructure/multi_tap_gesture.dart';
 import 'package:super_editor/src/infrastructure/sliver_hybrid_stack.dart';
 
 import '../infrastructure/document_gestures_interaction_overrides.dart';
+import 'selection_drag_scope.dart';
 
 /// Governs mouse gesture interaction with a document, such as scrolling
 /// a document with a scroll wheel, tapping to place a caret, and
@@ -119,6 +120,12 @@ class _DocumentMouseInteractorState extends State<DocumentMouseInteractor> with 
   final _mouseCursor = ValueNotifier<MouseCursor>(SystemMouseCursors.text);
   Offset? _lastHoverOffset;
 
+  /// Flipped to `true` when a selection drag begins and back to `false` when
+  /// the pointer is released. Provided to descendants via [SelectionDragScope]
+  /// so [TextComponent] can finalize deferred inline-marker reveal immediately
+  /// on mouse-up rather than waiting for the debounce timer.
+  final _isDraggingSelection = ValueNotifier<bool>(false);
+
   @override
   void initState() {
     super.initState();
@@ -182,6 +189,7 @@ class _DocumentMouseInteractorState extends State<DocumentMouseInteractor> with 
       _focusNode.dispose();
     }
     _selectionSubscription.cancel();
+    _isDraggingSelection.dispose();
     widget.autoScroller
       ..removeListener(_updateDragSelection)
       ..removeListener(_updateMouseCursorAtLatestOffset);
@@ -548,6 +556,7 @@ class _DocumentMouseInteractorState extends State<DocumentMouseInteractor> with 
     }
 
     _dragStartGlobal = details.globalPosition;
+    _isDraggingSelection.value = true;
 
     widget.autoScroller.enableAutoScrolling();
 
@@ -591,6 +600,7 @@ class _DocumentMouseInteractorState extends State<DocumentMouseInteractor> with 
   }
 
   void _onDragEnd() {
+    _isDraggingSelection.value = false;
     setState(() {
       _dragStartGlobal = null;
       _dragSelectionBase = null;
@@ -794,7 +804,10 @@ Updating drag selection:
             ),
           ),
         ),
-        widget.child,
+        SelectionDragScope(
+          isDragging: _isDraggingSelection,
+          child: widget.child,
+        ),
       ],
     );
   }
