@@ -120,11 +120,12 @@ class _DocumentMouseInteractorState extends State<DocumentMouseInteractor> with 
   final _mouseCursor = ValueNotifier<MouseCursor>(SystemMouseCursors.text);
   Offset? _lastHoverOffset;
 
-  /// Flipped to `true` when a selection drag begins and back to `false` when
-  /// the pointer is released. Provided to descendants via [SelectionDragScope]
-  /// so [TextComponent] can finalize deferred inline-marker reveal immediately
-  /// on mouse-up rather than waiting for the debounce timer.
-  final _isDraggingSelection = ValueNotifier<bool>(false);
+  /// Flipped to `true` on any pointer-down event and back to `false` on
+  /// pointer-up or pointer-cancel. Provided to descendants via
+  /// [SelectionDragScope] so [TextComponent] can suppress all inline-marker
+  /// reveals while the pointer is held down (preventing reflow during drag and
+  /// double-click selection), then finalize reveals on pointer-up.
+  final _isPointerDown = ValueNotifier<bool>(false);
 
   @override
   void initState() {
@@ -189,7 +190,7 @@ class _DocumentMouseInteractorState extends State<DocumentMouseInteractor> with 
       _focusNode.dispose();
     }
     _selectionSubscription.cancel();
-    _isDraggingSelection.dispose();
+    _isPointerDown.dispose();
     widget.autoScroller
       ..removeListener(_updateDragSelection)
       ..removeListener(_updateMouseCursorAtLatestOffset);
@@ -556,7 +557,6 @@ class _DocumentMouseInteractorState extends State<DocumentMouseInteractor> with 
     }
 
     _dragStartGlobal = details.globalPosition;
-    _isDraggingSelection.value = true;
 
     widget.autoScroller.enableAutoScrolling();
 
@@ -600,7 +600,6 @@ class _DocumentMouseInteractorState extends State<DocumentMouseInteractor> with 
   }
 
   void _onDragEnd() {
-    _isDraggingSelection.value = false;
     setState(() {
       _dragStartGlobal = null;
       _dragSelectionBase = null;
@@ -805,8 +804,14 @@ Updating drag selection:
           ),
         ),
         SelectionDragScope(
-          isDragging: _isDraggingSelection,
-          child: widget.child,
+          isPointerDown: _isPointerDown,
+          child: Listener(
+            behavior: HitTestBehavior.translucent,
+            onPointerDown: (_) => _isPointerDown.value = true,
+            onPointerUp: (_) => _isPointerDown.value = false,
+            onPointerCancel: (_) => _isPointerDown.value = false,
+            child: widget.child,
+          ),
         ),
       ],
     );

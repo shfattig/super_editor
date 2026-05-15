@@ -1362,10 +1362,20 @@ class TextComponentState extends State<TextComponent> with DocumentComponent imp
   Timer? _selectionFinalizeTimer;
   static const _kFinalizeDelay = Duration(milliseconds: 100);
 
-  /// Subscribed via [SelectionDragScope] to detect pointer-up without
-  /// requiring parameter threading from the app layer. Null when not under
-  /// a [DocumentMouseInteractor] (e.g., touch, unit tests).
-  ValueNotifier<bool>? _dragNotifier;
+  /// True when the cursor just entered this node via a pointer click, until
+  /// the pointer-up dwell timer fires (~300 ms). Inline markers are hidden
+  /// while true so that clicking into formatted text does not cause a reflow
+  /// before the user completes their intended action (double-click, drag, etc.).
+  ///
+  /// Set to `false` immediately (no dwell) when focus arrives via keyboard.
+  bool _isFirstFocus = true;
+  Timer? _tapRevealTimer;
+  static const _kTapRevealDelay = Duration(milliseconds: 300);
+
+  /// Subscribed via [SelectionDragScope] to detect all pointer-down/up events
+  /// without parameter threading. Null outside a [DocumentMouseInteractor]
+  /// (touch interactors, unit tests).
+  ValueNotifier<bool>? _pointerDownNotifier;
 
   // ---- Effective values passed to overrides and offset callbacks ----
   //
@@ -1374,12 +1384,19 @@ class TextComponentState extends State<TextComponent> with DocumentComponent imp
   //   mid-drag      → _selectionStartCursorOffset used, _nodeSelection null
   //   finalized sel → _cursorOffset null, _nodeSelection non-collapsed
 
+  /// False while the cursor just entered this node via a click (waiting for
+  /// double-click / dwell). True once the pointer-up timer has fired, or
+  /// immediately for keyboard navigation.
+  bool get _effectiveIsFocused => _isFocused && !_isFirstFocus;
+
   int? get _effectiveCursorOffset {
+    if (_isFirstFocus) return null;
     if (_nodeSelection == null || _nodeSelection!.isCollapsed) return _cursorOffset;
     return _nodeSelectionFinalized ? null : _selectionStartCursorOffset;
   }
 
   TextSelection? get _effectiveNodeSelection {
+    if (_isFirstFocus) return null;
     if (_nodeSelection == null || _nodeSelection!.isCollapsed) return _nodeSelection;
     return _nodeSelectionFinalized ? _nodeSelection : null;
   }
@@ -1394,11 +1411,11 @@ class TextComponentState extends State<TextComponent> with DocumentComponent imp
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
-    final newDragNotifier = SelectionDragScope.maybeOf(context);
-    if (newDragNotifier != _dragNotifier) {
-      _dragNotifier?.removeListener(_onDragFinalized);
-      _dragNotifier = newDragNotifier;
-      _dragNotifier?.addListener(_onDragFinalized);
+    final newNotifier = SelectionDragScope.maybeOf(context);
+    if (newNotifier != _pointerDownNotifier) {
+      _pointerDownNotifier?.removeListener(_onPointerStateChanged);
+      _pointerDownNotifier = newNotifier;
+      _pointerDownNotifier?.addListener(_onPointerStateChanged);
     }
   }
 
@@ -1415,24 +1432,41 @@ class TextComponentState extends State<TextComponent> with DocumentComponent imp
   @override
   void dispose() {
     _selectionFinalizeTimer?.cancel();
-    _dragNotifier?.removeListener(_onDragFinalized);
+    _tapRevealTimer?.cancel();
+    _pointerDownNotifier?.removeListener(_onPointerStateChanged);
     widget.selectionNotifier?.removeListener(_onSelectionChange);
     super.dispose();
   }
 
-  /// Called when [_dragNotifier] changes value.
+  /// Called when [_pointerDownNotifier] changes value.
   ///
-  /// When the value goes `false` (pointer released), immediately finalizes
-  /// the selection reveal for any pending non-collapsed selection.
-  void _onDragFinalized() {
-    if (_dragNotifier?.value == false &&
-        _nodeSelection != null &&
-        !_nodeSelection!.isCollapsed &&
-        !_nodeSelectionFinalized) {
+  /// - Pointer-down (`true`): cancel any pending tap-reveal timer so that
+  ///   double-clicks and drags are never interrupted by a mid-gesture reveal.
+  /// - Pointer-up (`false`):
+  ///   - Non-collapsed selection (drag / double-click): finalize immediately.
+  ///   - Collapsed cursor (single tap): start [_kTapRevealDelay] timer; reveal
+  ///     adjacent markers once it fires, giving double-click time to start.
+  void _onPointerStateChanged() {
+    final isDown = _pointerDownNotifier?.value == true;
+    if (isDown) {
+      _tapRevealTimer?.cancel();
+      _tapRevealTimer = null;
+      return;
+    }
+    // Pointer released.
+    if (!_isFocused) return;
+    if (_nodeSelection != null && !_nodeSelection!.isCollapsed) {
+      // Drag or double-click selection completed: reveal all spans in selection.
       _selectionFinalizeTimer?.cancel();
       _selectionFinalizeTimer = null;
-      setState(() {
-        _nodeSelectionFinalized = true;
+      if (!_nodeSelectionFinalized) {
+        setState(() { _nodeSelectionFinalized = true; });
+      }
+    } else if (_isFirstFocus) {
+      // Single tap: wait for potential double-click before revealing markers.
+      _tapRevealTimer?.cancel();
+      _tapRevealTimer = Timer(_kTapRevealDelay, () {
+        if (mounted) setState(() { _isFirstFocus = false; });
       });
     }
   }
@@ -1442,12 +1476,14 @@ class TextComponentState extends State<TextComponent> with DocumentComponent imp
     final wasOffset = _cursorOffset;
     final wasSelection = _nodeSelection;
     final wasFinalized = _nodeSelectionFinalized;
+    final wasFirstFocus = _isFirstFocus;
     _updateFocusState();
     _updateFinalizeState(wasSelection);
     if (_isFocused != wasFocused ||
         _cursorOffset != wasOffset ||
         _nodeSelection != wasSelection ||
-        _nodeSelectionFinalized != wasFinalized) {
+        _nodeSelectionFinalized != wasFinalized ||
+        _isFirstFocus != wasFirstFocus) {
       setState(() {});
     }
   }
@@ -1464,10 +1500,10 @@ class TextComponentState extends State<TextComponent> with DocumentComponent imp
     if (_nodeSelection != prevSelection) {
       _nodeSelectionFinalized = false;
       _selectionFinalizeTimer?.cancel();
-      // When under a mouse interactor, [_onDragFinalized] handles finalization
-      // on pointer-up. Fall back to a debounce timer for keyboard shift-selection
-      // (which has no pointer-up event).
-      if (_dragNotifier == null) {
+      // When under a mouse interactor, [_onPointerStateChanged] handles
+      // finalization on pointer-up. Fall back to a debounce timer for keyboard
+      // shift-selection (no pointer-up events).
+      if (_pointerDownNotifier == null) {
         _selectionFinalizeTimer = Timer(_kFinalizeDelay, () {
           if (mounted) setState(() { _nodeSelectionFinalized = true; });
         });
@@ -1476,6 +1512,8 @@ class TextComponentState extends State<TextComponent> with DocumentComponent imp
   }
 
   void _updateFocusState() {
+    final wasFocused = _isFocused;
+
     final sel = widget.selectionNotifier?.value;
     final id = widget.nodeId;
     if (sel == null || id == null) {
@@ -1483,6 +1521,9 @@ class TextComponentState extends State<TextComponent> with DocumentComponent imp
       _cursorOffset = null;
       _nodeSelection = null;
       _selectionStartCursorOffset = null;
+      _isFirstFocus = true;
+      _tapRevealTimer?.cancel();
+      _tapRevealTimer = null;
       return;
     }
     _isFocused = sel.base.nodeId == id || sel.extent.nodeId == id;
@@ -1513,6 +1554,28 @@ class TextComponentState extends State<TextComponent> with DocumentComponent imp
       _nodeSelection = null;
       _selectionStartCursorOffset = null;
     }
+
+    // Update _isFirstFocus:
+    // - Node lost focus: reset so next entry starts in first-focus state.
+    // - Node just gained focus via pointer click: suppress reveal until pointer-up dwell.
+    // - Node just gained focus via keyboard (no pointer down): reveal immediately.
+    // - Already focused: leave _isFirstFocus unchanged (once revealed, stays revealed).
+    if (!_isFocused) {
+      _isFirstFocus = true;
+      _tapRevealTimer?.cancel();
+      _tapRevealTimer = null;
+    } else if (!wasFocused) {
+      if (_pointerDownNotifier?.value == true) {
+        // Pointer is held down — suppress reveal until pointer-up.
+        _isFirstFocus = true;
+      } else {
+        // Keyboard navigation — reveal adjacent markers immediately.
+        _isFirstFocus = false;
+      }
+    }
+    // If wasFocused && _isFocused: _isFirstFocus is left unchanged.
+    // Once markers are revealed (_isFirstFocus = false), they stay revealed
+    // until the cursor leaves the node.
   }
 
   /// Converts [rawSel] from raw-string coordinates to working-text coordinates.
@@ -1544,7 +1607,7 @@ class TextComponentState extends State<TextComponent> with DocumentComponent imp
         key: _textKey,
         richText: widget.computeInlineSpanOverride != null
             ? widget.computeInlineSpanOverride!(
-                context, _textStyleWithBlockType, _isFocused, _effectiveCursorOffset, _effectiveNodeSelection)
+                context, _textStyleWithBlockType, _effectiveIsFocused, _effectiveCursorOffset, _effectiveNodeSelection)
             : widget.text.computeInlineSpan(
                 context,
                 _textStyleWithBlockType,
