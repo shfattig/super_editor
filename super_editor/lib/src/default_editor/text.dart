@@ -1,5 +1,6 @@
 // ignore_for_file: avoid_renaming_method_parameters
 
+import 'dart:async';
 import 'dart:collection';
 import 'dart:math';
 
@@ -904,7 +905,7 @@ class TextComponentState extends State<TextComponent> with DocumentComponent imp
     final textPosition = textLayout.getPositionNearestToOffset(localOffset);
 
     if (widget.workingToRawOffset != null) {
-      final rawOffset = widget.workingToRawOffset!(textPosition.offset, _cursorOffset, _nodeSelection);
+      final rawOffset = widget.workingToRawOffset!(textPosition.offset, _effectiveCursorOffset, _effectiveNodeSelection);
       return TextNodePosition(offset: rawOffset, affinity: textPosition.affinity);
     }
     return TextNodePosition.fromTextPosition(textPosition);
@@ -917,7 +918,7 @@ class TextComponentState extends State<TextComponent> with DocumentComponent imp
     }
     if (widget.rawToWorkingOffset != null) {
       final workingPos = TextPosition(
-        offset: widget.rawToWorkingOffset!(nodePosition.offset, _cursorOffset, _nodeSelection),
+        offset: widget.rawToWorkingOffset!(nodePosition.offset, _effectiveCursorOffset, _effectiveNodeSelection),
         affinity: nodePosition.affinity,
       );
       return textLayout.getOffsetAtPosition(workingPos);
@@ -946,7 +947,7 @@ class TextComponentState extends State<TextComponent> with DocumentComponent imp
     final offset = getOffsetForPosition(nodePosition);
     final workingPos = widget.rawToWorkingOffset != null
         ? TextPosition(
-            offset: widget.rawToWorkingOffset!(nodePosition.offset, _cursorOffset, _nodeSelection),
+            offset: widget.rawToWorkingOffset!(nodePosition.offset, _effectiveCursorOffset, _effectiveNodeSelection),
             affinity: nodePosition.affinity,
           )
         : nodePosition;
@@ -1262,7 +1263,7 @@ class TextComponentState extends State<TextComponent> with DocumentComponent imp
     }
     if (widget.workingToRawOffset != null) {
       return TextNodePosition(
-        offset: widget.workingToRawOffset!(positionOneLineUp.offset, _cursorOffset, _nodeSelection),
+        offset: widget.workingToRawOffset!(positionOneLineUp.offset, _effectiveCursorOffset, _effectiveNodeSelection),
         affinity: positionOneLineUp.affinity,
       );
     }
@@ -1282,7 +1283,7 @@ class TextComponentState extends State<TextComponent> with DocumentComponent imp
     }
     if (widget.workingToRawOffset != null) {
       return TextNodePosition(
-        offset: widget.workingToRawOffset!(positionOneLineDown.offset, _cursorOffset, _nodeSelection),
+        offset: widget.workingToRawOffset!(positionOneLineDown.offset, _effectiveCursorOffset, _effectiveNodeSelection),
         affinity: positionOneLineDown.affinity,
       );
     }
@@ -1295,7 +1296,7 @@ class TextComponentState extends State<TextComponent> with DocumentComponent imp
     final result = textLayout.getPositionAtEndOfLine(workingPosition);
     if (widget.workingToRawOffset != null) {
       return TextNodePosition(
-        offset: widget.workingToRawOffset!(result.offset, _cursorOffset, _nodeSelection),
+        offset: widget.workingToRawOffset!(result.offset, _effectiveCursorOffset, _effectiveNodeSelection),
         affinity: result.affinity,
       );
     }
@@ -1308,7 +1309,7 @@ class TextComponentState extends State<TextComponent> with DocumentComponent imp
     final result = textLayout.getPositionAtStartOfLine(workingPosition);
     if (widget.workingToRawOffset != null) {
       return TextNodePosition(
-        offset: widget.workingToRawOffset!(result.offset, _cursorOffset, _nodeSelection),
+        offset: widget.workingToRawOffset!(result.offset, _effectiveCursorOffset, _effectiveNodeSelection),
         affinity: result.affinity,
       );
     }
@@ -1344,9 +1345,38 @@ class TextComponentState extends State<TextComponent> with DocumentComponent imp
 
   bool _isFocused = false;
   int? _cursorOffset;
+
   /// The focused selection within this node's raw text.
   /// Collapsed when cursor-only; non-collapsed when there is a range selection.
   TextSelection? _nodeSelection;
+
+  /// Raw cursor offset at the moment a non-collapsed selection began. Used to
+  /// keep spans that were already revealed before the drag visible during the
+  /// drag, without revealing new spans mid-drag.
+  int? _selectionStartCursorOffset;
+
+  /// True once a non-collapsed selection has been stable for [_kFinalizeDelay].
+  /// Only after finalization are selection-overlapping spans revealed.
+  bool _nodeSelectionFinalized = false;
+  Timer? _selectionFinalizeTimer;
+  static const _kFinalizeDelay = Duration(milliseconds: 100);
+
+  // ---- Effective values passed to overrides and offset callbacks ----
+  //
+  // Three states:
+  //   cursor        → _cursorOffset set, _nodeSelection collapsed
+  //   mid-drag      → _selectionStartCursorOffset used, _nodeSelection null
+  //   finalized sel → _cursorOffset null, _nodeSelection non-collapsed
+
+  int? get _effectiveCursorOffset {
+    if (_nodeSelection == null || _nodeSelection!.isCollapsed) return _cursorOffset;
+    return _nodeSelectionFinalized ? null : _selectionStartCursorOffset;
+  }
+
+  TextSelection? get _effectiveNodeSelection {
+    if (_nodeSelection == null || _nodeSelection!.isCollapsed) return _nodeSelection;
+    return _nodeSelectionFinalized ? _nodeSelection : null;
+  }
 
   @override
   void initState() {
@@ -1367,6 +1397,7 @@ class TextComponentState extends State<TextComponent> with DocumentComponent imp
 
   @override
   void dispose() {
+    _selectionFinalizeTimer?.cancel();
     widget.selectionNotifier?.removeListener(_onSelectionChange);
     super.dispose();
   }
@@ -1375,9 +1406,32 @@ class TextComponentState extends State<TextComponent> with DocumentComponent imp
     final wasFocused = _isFocused;
     final wasOffset = _cursorOffset;
     final wasSelection = _nodeSelection;
+    final wasFinalized = _nodeSelectionFinalized;
     _updateFocusState();
-    if (_isFocused != wasFocused || _cursorOffset != wasOffset || _nodeSelection != wasSelection) {
+    _updateFinalizeState(wasSelection);
+    if (_isFocused != wasFocused ||
+        _cursorOffset != wasOffset ||
+        _nodeSelection != wasSelection ||
+        _nodeSelectionFinalized != wasFinalized) {
       setState(() {});
+    }
+  }
+
+  void _updateFinalizeState(TextSelection? prevSelection) {
+    final isRange = _nodeSelection != null && !_nodeSelection!.isCollapsed;
+    if (!isRange) {
+      _selectionFinalizeTimer?.cancel();
+      _selectionFinalizeTimer = null;
+      _nodeSelectionFinalized = false;
+      return;
+    }
+    // Non-collapsed selection: restart debounce timer whenever it changes.
+    if (_nodeSelection != prevSelection) {
+      _nodeSelectionFinalized = false;
+      _selectionFinalizeTimer?.cancel();
+      _selectionFinalizeTimer = Timer(_kFinalizeDelay, () {
+        if (mounted) setState(() { _nodeSelectionFinalized = true; });
+      });
     }
   }
 
@@ -1388,6 +1442,7 @@ class TextComponentState extends State<TextComponent> with DocumentComponent imp
       _isFocused = false;
       _cursorOffset = null;
       _nodeSelection = null;
+      _selectionStartCursorOffset = null;
       return;
     }
     _isFocused = sel.base.nodeId == id || sel.extent.nodeId == id;
@@ -1396,9 +1451,16 @@ class TextComponentState extends State<TextComponent> with DocumentComponent imp
       final offset = pos is TextNodePosition ? pos.offset : null;
       _cursorOffset = offset;
       _nodeSelection = offset != null ? TextSelection.collapsed(offset: offset) : null;
+      _selectionStartCursorOffset = null;
     } else if (_isFocused) {
+      // Save cursor position when non-collapsed selection first starts.
+      final wasCollapsedOrUnfocused =
+          _nodeSelection == null || _nodeSelection!.isCollapsed;
+      if (wasCollapsedOrUnfocused) {
+        _selectionStartCursorOffset = _cursorOffset;
+      }
       _cursorOffset = null;
-      // Compute the selection range within this node only (both ends must be here).
+      // Compute the selection range within this node (both ends must be here).
       final basePos = sel.base.nodeId == id ? sel.base.nodePosition : null;
       final extentPos = sel.extent.nodeId == id ? sel.extent.nodePosition : null;
       final baseOff = basePos is TextNodePosition ? basePos.offset : null;
@@ -1409,6 +1471,7 @@ class TextComponentState extends State<TextComponent> with DocumentComponent imp
     } else {
       _cursorOffset = null;
       _nodeSelection = null;
+      _selectionStartCursorOffset = null;
     }
   }
 
@@ -1417,15 +1480,15 @@ class TextComponentState extends State<TextComponent> with DocumentComponent imp
   TextSelection? _toWorkingSelection(TextSelection? rawSel) {
     if (rawSel == null || widget.rawToWorkingOffset == null) return rawSel;
     return rawSel.copyWith(
-      baseOffset: widget.rawToWorkingOffset!(rawSel.baseOffset, _cursorOffset, _nodeSelection),
-      extentOffset: widget.rawToWorkingOffset!(rawSel.extentOffset, _cursorOffset, _nodeSelection),
+      baseOffset: widget.rawToWorkingOffset!(rawSel.baseOffset, _effectiveCursorOffset, _effectiveNodeSelection),
+      extentOffset: widget.rawToWorkingOffset!(rawSel.extentOffset, _effectiveCursorOffset, _effectiveNodeSelection),
     );
   }
 
   TextPosition _toWorkingPosition(TextPosition rawPos) {
     if (widget.rawToWorkingOffset == null) return rawPos;
     return TextPosition(
-      offset: widget.rawToWorkingOffset!(rawPos.offset, _cursorOffset, _nodeSelection),
+      offset: widget.rawToWorkingOffset!(rawPos.offset, _effectiveCursorOffset, _effectiveNodeSelection),
       affinity: rawPos.affinity,
     );
   }
@@ -1441,7 +1504,7 @@ class TextComponentState extends State<TextComponent> with DocumentComponent imp
         key: _textKey,
         richText: widget.computeInlineSpanOverride != null
             ? widget.computeInlineSpanOverride!(
-                context, _textStyleWithBlockType, _isFocused, _cursorOffset, _nodeSelection)
+                context, _textStyleWithBlockType, _isFocused, _effectiveCursorOffset, _effectiveNodeSelection)
             : widget.text.computeInlineSpan(
                 context,
                 _textStyleWithBlockType,
