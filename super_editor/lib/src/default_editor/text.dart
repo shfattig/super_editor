@@ -1351,24 +1351,24 @@ class TextComponentState extends State<TextComponent> with DocumentComponent imp
   /// Collapsed when cursor-only; non-collapsed when there is a range selection.
   TextSelection? _nodeSelection;
 
-  /// Raw cursor offset at the moment a non-collapsed selection began. Used to
-  /// keep spans that were already revealed before the drag visible during the
-  /// drag, without revealing new spans mid-drag.
-  int? _selectionStartCursorOffset;
-
   /// True once a non-collapsed selection has been finalized (pointer released
   /// or stable for [_kFinalizeDelay]). Only then are selection-overlapping spans revealed.
   bool _nodeSelectionFinalized = false;
   Timer? _selectionFinalizeTimer;
   static const _kFinalizeDelay = Duration(milliseconds: 100);
 
-  /// True when the cursor just entered this node via a pointer click, until
-  /// the pointer-up dwell timer fires (~300 ms). Inline markers are hidden
-  /// while true so that clicking into formatted text does not cause a reflow
-  /// before the user completes their intended action (double-click, drag, etc.).
+  /// While true, the effective values passed to [computeInlineSpanOverride] are
+  /// frozen at the snapshot taken on pointer-down, preventing any conceal/reveal
+  /// state changes until the interaction completes.
   ///
-  /// Set to `false` immediately (no dwell) when focus arrives via keyboard.
-  bool _isFirstFocus = true;
+  /// Frozen on pointer-down; unfrozen when:
+  /// - The dwell timer fires after a single tap (300 ms with no second click).
+  /// - Pointer-up after a drag/selection.
+  /// - The node loses focus (stale snapshot discarded).
+  bool _isFrozen = false;
+  bool _frozenIsFocused = false;
+  int? _frozenCursorOffset;
+  TextSelection? _frozenNodeSelection;
   Timer? _tapRevealTimer;
   static const _kTapRevealDelay = Duration(milliseconds: 300);
 
@@ -1377,41 +1377,29 @@ class TextComponentState extends State<TextComponent> with DocumentComponent imp
   /// (touch interactors, unit tests).
   ValueNotifier<bool>? _pointerDownNotifier;
 
-  /// Timestamp of the most recent pointer-down event. Used in [_onSelectionChange]
-  /// to distinguish a fast tap (pointer went down and up before the selection
-  /// update arrived — same frame) from keyboard navigation (no recent pointer).
+  /// Timestamp of the most recent pointer-down event. Used to detect fast taps
+  /// (pointer-up fires before the selection update) in [_onPointerStateChanged].
   DateTime? _lastPointerDownTime;
 
   // ---- Effective values passed to overrides and offset callbacks ----
-  //
-  // Three states:
-  //   cursor        → _cursorOffset set, _nodeSelection collapsed
-  //   mid-drag      → _selectionStartCursorOffset used, _nodeSelection null
-  //   finalized sel → _cursorOffset null, _nodeSelection non-collapsed
 
-  /// False while the cursor just entered this node via a click (waiting for
-  /// double-click / dwell). True once the pointer-up timer has fired, or
-  /// immediately for keyboard navigation.
-  bool get _effectiveIsFocused => _isFocused && !_isFirstFocus;
+  /// While frozen, returns the snapshot taken at pointer-down so no
+  /// conceal/reveal transitions occur mid-interaction. Otherwise returns the
+  /// live focused state (immediate reveal for keyboard navigation).
+  bool get _effectiveIsFocused => _isFrozen ? _frozenIsFocused : _isFocused;
 
-  int? get _effectiveCursorOffset {
-    if (_isFirstFocus) return null;
-    if (_nodeSelection == null || _nodeSelection!.isCollapsed) {
-      // For cross-node drags, _cursorOffset is null (cleared when non-collapsed)
-      // but _selectionStartCursorOffset still holds the drag-start position.
-      return _cursorOffset ?? _selectionStartCursorOffset;
-    }
-    return _nodeSelectionFinalized ? null : _selectionStartCursorOffset;
-  }
+  /// While frozen, returns the snapshotted cursor offset. Otherwise returns the
+  /// current cursor offset (null when a non-collapsed selection is active).
+  int? get _effectiveCursorOffset => _isFrozen ? _frozenCursorOffset : _cursorOffset;
 
+  /// While frozen, returns the snapshotted node selection. Otherwise returns the
+  /// finalized selection (null until pointer-up or keyboard debounce fires).
   TextSelection? get _effectiveNodeSelection {
-    if (_isFirstFocus) return null;
-    // Collapsed cursor: return as-is for cursor-proximity reveal.
-    if (_nodeSelection != null && _nodeSelection!.isCollapsed) return _nodeSelection;
+    if (_isFrozen) return _frozenNodeSelection;
     if (!_nodeSelectionFinalized) return null;
     // For cross-node selections, _nodeSelection is null (only set when both endpoints
     // are in this node). Fall back to widget.textSelection — the presenter-computed
-    // per-node selection, which is correct for endpoint and middle nodes alike.
+    // per-node selection, correct for endpoint and middle nodes alike.
     return _nodeSelection ?? widget.textSelection;
   }
 
@@ -1454,125 +1442,83 @@ class TextComponentState extends State<TextComponent> with DocumentComponent imp
 
   /// Called when [_pointerDownNotifier] changes value.
   ///
-  /// - Pointer-down (`true`): cancel any pending tap-reveal timer so that
-  ///   double-clicks and drags are never interrupted by a mid-gesture reveal.
-  /// - Pointer-up (`false`):
-  ///   - Non-collapsed selection (drag / double-click): finalize immediately.
-  ///   - Collapsed cursor (single tap): start [_kTapRevealDelay] timer; reveal
-  ///     adjacent markers once it fires, giving double-click time to start.
+  /// Pointer-down: snapshot current effective state and freeze it so no
+  /// conceal/reveal changes occur while the pointer is held or during the
+  /// double-click dwell window.
+  ///
+  /// Pointer-up:
+  /// - Non-collapsed selection (drag / double-click): unfreeze and finalize.
+  /// - Collapsed cursor / fast tap: start [_kTapRevealDelay] dwell; unfreeze
+  ///   once it fires, giving double-click time to arrive.
   void _onPointerStateChanged() {
     final isDown = _pointerDownNotifier?.value == true;
     if (isDown) {
       _lastPointerDownTime = DateTime.now();
       _tapRevealTimer?.cancel();
       _tapRevealTimer = null;
+      // Snapshot once per interaction; ignore if already frozen (e.g. double-click).
+      if (!_isFrozen) {
+        _isFrozen = true;
+        _frozenIsFocused = _isFocused;
+        _frozenCursorOffset = _cursorOffset;
+        _frozenNodeSelection = _nodeSelectionFinalized
+            ? (_nodeSelection ?? widget.textSelection)
+            : null;
+      }
       return;
     }
     // Pointer released.
-    // Use the presenter-computed per-node selection as a fallback:
-    // - For cross-node selections, _nodeSelection is null on endpoint nodes
-    //   (only set when both base+extent are in this node).
-    // - For middle nodes (between base and extent), _isFocused is false but
-    //   widget.textSelection is the full-node selection.
+    // Use presenter-computed per-node selection as fallback: covers cross-node
+    // endpoint nodes (_nodeSelection == null) and middle nodes (_isFocused == false).
     final localSel = _nodeSelection ?? widget.textSelection;
-    final hasNonCollapsedSelection = localSel != null && !localSel.isCollapsed;
-    if (!_isFocused && !hasNonCollapsedSelection) return;
+    final hasSelection = localSel != null && !localSel.isCollapsed;
 
-    if (hasNonCollapsedSelection) {
-      // Drag or double-click selection completed: reveal all spans in selection.
+    if (hasSelection) {
+      // Drag or selection completed: unfreeze and reveal all selected spans.
+      _tapRevealTimer?.cancel();
+      _tapRevealTimer = null;
       _selectionFinalizeTimer?.cancel();
       _selectionFinalizeTimer = null;
-      if (!_nodeSelectionFinalized || _isFirstFocus) {
-        setState(() {
-          _isFirstFocus = false;
-          _nodeSelectionFinalized = true;
-        });
-      }
-    } else if (_isFirstFocus) {
-      // Single tap confirmed (pointer released, no drag): start dwell timer to
-      // wait for a potential double-click before revealing markers.
+      setState(() {
+        _isFrozen = false;
+        _nodeSelectionFinalized = true;
+      });
+    } else if (_isFocused) {
+      // Single tap on focused node: start dwell before unfreezing so double-click
+      // has time to arrive without triggering a premature reveal.
       _tapRevealTimer?.cancel();
       _tapRevealTimer = Timer(_kTapRevealDelay, () {
-        if (mounted) setState(() { _isFirstFocus = false; });
+        if (mounted) setState(() { _isFrozen = false; });
       });
+    } else {
+      // Fast tap: pointer-up arrived before the selection update fired (same frame).
+      // A recent pointer-down timestamp confirms this was a tap, not keyboard.
+      final recentTap = _lastPointerDownTime != null &&
+          DateTime.now().difference(_lastPointerDownTime!).inMilliseconds < 500;
+      if (recentTap) {
+        _tapRevealTimer?.cancel();
+        _tapRevealTimer = Timer(_kTapRevealDelay, () {
+          if (mounted) setState(() { _isFrozen = false; });
+        });
+      } else {
+        setState(() { _isFrozen = false; });
+      }
     }
   }
 
   void _onSelectionChange() {
-    final wasFocused = _isFocused;
     final wasOffset = _cursorOffset;
     final wasSelection = _nodeSelection;
     final wasFinalized = _nodeSelectionFinalized;
-    final wasFirstFocus = _isFirstFocus;
+    final wasFocused = _isFocused;
     _updateFocusState();
     _updateFinalizeState(wasSelection);
-    _recoverFastTapOrKeyboard(wasFocused);
-    _resetFirstFocusOnPointerMove(wasFocused, wasOffset);
     if (_isFocused != wasFocused ||
         _cursorOffset != wasOffset ||
         _nodeSelection != wasSelection ||
-        _nodeSelectionFinalized != wasFinalized ||
-        _isFirstFocus != wasFirstFocus) {
+        _nodeSelectionFinalized != wasFinalized) {
       setState(() {});
     }
-  }
-
-  /// Handles cursor-reveal timing for two cases that [_onPointerStateChanged]
-  /// cannot detect on its own:
-  ///
-  /// **Fast tap**: pointer-down and pointer-up both arrive in the same frame
-  /// before the selection update fires, so [_onPointerStateChanged] saw
-  /// `_isFocused == false` on pointer-up and skipped. Here we detect the
-  /// pattern via [_lastPointerDownTime] and start the dwell timer.
-  ///
-  /// **Keyboard navigation**: cursor entered the node with no recent pointer
-  /// event. Reveal markers immediately (no dwell needed).
-  void _recoverFastTapOrKeyboard(bool wasFocused) {
-    if (_pointerDownNotifier == null) return; // handled elsewhere
-    if (!(!wasFocused && _isFocused && _isFirstFocus)) return; // not a fresh entry
-
-    if (_pointerDownNotifier!.value) return; // pointer still down — wait for _onPointerStateChanged
-
-    // Pointer is up. Was there a recent pointer-down (fast tap) or was this keyboard?
-    final lastDown = _lastPointerDownTime;
-    final isRecentPointerEvent = lastDown != null &&
-        DateTime.now().difference(lastDown).inMilliseconds < 500;
-
-    if (isRecentPointerEvent) {
-      // Fast tap: pointer went down + up before selection arrived. Start dwell timer.
-      _tapRevealTimer?.cancel();
-      _tapRevealTimer = Timer(_kTapRevealDelay, () {
-        if (mounted) setState(() { _isFirstFocus = false; });
-      });
-    } else {
-      // Keyboard or programmatic navigation: reveal immediately.
-      _isFirstFocus = false;
-    }
-  }
-
-  /// Re-suppresses marker reveal when the cursor moves within the same node via
-  /// a pointer click (not keyboard). Without this, moving from one span to another
-  /// span on the same line would reveal the new span's markers immediately, which
-  /// can cause text reflow at the start of a drag selection.
-  ///
-  /// Only fires when:
-  /// - Node stays focused (no node transition).
-  /// - Selection is still collapsed (cursor move, not drag start).
-  /// - Cursor actually moved to a new offset.
-  /// - Reveal is currently active (`_isFirstFocus == false`).
-  /// - A pointer event happened recently (pointer is down or was down < 500ms ago).
-  void _resetFirstFocusOnPointerMove(bool wasFocused, int? wasOffset) {
-    if (!wasFocused || !_isFocused) return;
-    if (_nodeSelection == null || !_nodeSelection!.isCollapsed) return;
-    if (wasOffset == _cursorOffset) return;
-    if (_isFirstFocus) return; // already suppressed
-    final pointerDown = _pointerDownNotifier?.value == true;
-    final recentPointer = _lastPointerDownTime != null &&
-        DateTime.now().difference(_lastPointerDownTime!).inMilliseconds < 500;
-    if (!pointerDown && !recentPointer) return;
-    _isFirstFocus = true;
-    _tapRevealTimer?.cancel();
-    _tapRevealTimer = null;
   }
 
   void _updateFinalizeState(TextSelection? prevSelection) {
@@ -1592,26 +1538,21 @@ class TextComponentState extends State<TextComponent> with DocumentComponent imp
       // shift-selection (no pointer-up events).
       if (_pointerDownNotifier == null) {
         _selectionFinalizeTimer = Timer(_kFinalizeDelay, () {
-          if (mounted) setState(() {
-            _isFirstFocus = false;
-            _nodeSelectionFinalized = true;
-          });
+          if (mounted) setState(() { _nodeSelectionFinalized = true; });
         });
       }
     }
   }
 
   void _updateFocusState() {
-    final wasFocused = _isFocused;
-
     final sel = widget.selectionNotifier?.value;
     final id = widget.nodeId;
     if (sel == null || id == null) {
       _isFocused = false;
       _cursorOffset = null;
       _nodeSelection = null;
-      _selectionStartCursorOffset = null;
-      _isFirstFocus = true;
+      // Discard any stale frozen state — node is no longer in the document selection.
+      _isFrozen = false;
       _tapRevealTimer?.cancel();
       _tapRevealTimer = null;
       return;
@@ -1622,14 +1563,7 @@ class TextComponentState extends State<TextComponent> with DocumentComponent imp
       final offset = pos is TextNodePosition ? pos.offset : null;
       _cursorOffset = offset;
       _nodeSelection = offset != null ? TextSelection.collapsed(offset: offset) : null;
-      _selectionStartCursorOffset = null;
     } else if (_isFocused) {
-      // Save cursor position when non-collapsed selection first starts.
-      final wasCollapsedOrUnfocused =
-          _nodeSelection == null || _nodeSelection!.isCollapsed;
-      if (wasCollapsedOrUnfocused) {
-        _selectionStartCursorOffset = _cursorOffset;
-      }
       _cursorOffset = null;
       // Compute the selection range within this node (both ends must be here).
       final basePos = sel.base.nodeId == id ? sel.base.nodePosition : null;
@@ -1642,28 +1576,11 @@ class TextComponentState extends State<TextComponent> with DocumentComponent imp
     } else {
       _cursorOffset = null;
       _nodeSelection = null;
-      _selectionStartCursorOffset = null;
-    }
-
-    // Update _isFirstFocus:
-    // - Node lost focus: reset so next entry starts in first-focus state.
-    // - Node just gained focus via pointer click: suppress reveal until pointer-up dwell.
-    // - Node just gained focus via keyboard (no pointer down): reveal immediately.
-    // - Already focused: leave _isFirstFocus unchanged (once revealed, stays revealed).
-    if (!_isFocused) {
-      _isFirstFocus = true;
+      // Node lost focus: discard stale frozen state so markers hide immediately.
+      _isFrozen = false;
       _tapRevealTimer?.cancel();
       _tapRevealTimer = null;
-    } else if (!wasFocused) {
-      // Always suppress on fresh entry when under a mouse interactor.
-      // _recoverFastTapOrKeyboard (called from _onSelectionChange) will
-      // determine whether to reveal immediately (keyboard) or start the
-      // dwell timer (fast tap / slow tap handled by _onPointerStateChanged).
-      _isFirstFocus = (_pointerDownNotifier != null);
     }
-    // If wasFocused && _isFocused: _isFirstFocus is left unchanged.
-    // Once markers are revealed (_isFirstFocus = false), they stay revealed
-    // until the cursor leaves the node.
   }
 
   /// Converts [rawSel] from raw-string coordinates to working-text coordinates.
