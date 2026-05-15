@@ -1396,14 +1396,23 @@ class TextComponentState extends State<TextComponent> with DocumentComponent imp
 
   int? get _effectiveCursorOffset {
     if (_isFirstFocus) return null;
-    if (_nodeSelection == null || _nodeSelection!.isCollapsed) return _cursorOffset;
+    if (_nodeSelection == null || _nodeSelection!.isCollapsed) {
+      // For cross-node drags, _cursorOffset is null (cleared when non-collapsed)
+      // but _selectionStartCursorOffset still holds the drag-start position.
+      return _cursorOffset ?? _selectionStartCursorOffset;
+    }
     return _nodeSelectionFinalized ? null : _selectionStartCursorOffset;
   }
 
   TextSelection? get _effectiveNodeSelection {
     if (_isFirstFocus) return null;
-    if (_nodeSelection == null || _nodeSelection!.isCollapsed) return _nodeSelection;
-    return _nodeSelectionFinalized ? _nodeSelection : null;
+    // Collapsed cursor: return as-is for cursor-proximity reveal.
+    if (_nodeSelection != null && _nodeSelection!.isCollapsed) return _nodeSelection;
+    if (!_nodeSelectionFinalized) return null;
+    // For cross-node selections, _nodeSelection is null (only set when both endpoints
+    // are in this node). Fall back to widget.textSelection — the presenter-computed
+    // per-node selection, which is correct for endpoint and middle nodes alike.
+    return _nodeSelection ?? widget.textSelection;
   }
 
   @override
@@ -1460,10 +1469,17 @@ class TextComponentState extends State<TextComponent> with DocumentComponent imp
       return;
     }
     // Pointer released.
-    if (!_isFocused) return;
-    if (_nodeSelection != null && !_nodeSelection!.isCollapsed) {
-      // Drag or double-click selection completed: reveal all spans in selection
-      // and allow heading reveal too.
+    // Use the presenter-computed per-node selection as a fallback:
+    // - For cross-node selections, _nodeSelection is null on endpoint nodes
+    //   (only set when both base+extent are in this node).
+    // - For middle nodes (between base and extent), _isFocused is false but
+    //   widget.textSelection is the full-node selection.
+    final localSel = _nodeSelection ?? widget.textSelection;
+    final hasNonCollapsedSelection = localSel != null && !localSel.isCollapsed;
+    if (!_isFocused && !hasNonCollapsedSelection) return;
+
+    if (hasNonCollapsedSelection) {
+      // Drag or double-click selection completed: reveal all spans in selection.
       _selectionFinalizeTimer?.cancel();
       _selectionFinalizeTimer = null;
       if (!_nodeSelectionFinalized || _isFirstFocus) {
@@ -1491,6 +1507,7 @@ class TextComponentState extends State<TextComponent> with DocumentComponent imp
     _updateFocusState();
     _updateFinalizeState(wasSelection);
     _recoverFastTapOrKeyboard(wasFocused);
+    _resetFirstFocusOnPointerMove(wasFocused, wasOffset);
     if (_isFocused != wasFocused ||
         _cursorOffset != wasOffset ||
         _nodeSelection != wasSelection ||
@@ -1531,6 +1548,31 @@ class TextComponentState extends State<TextComponent> with DocumentComponent imp
       // Keyboard or programmatic navigation: reveal immediately.
       _isFirstFocus = false;
     }
+  }
+
+  /// Re-suppresses marker reveal when the cursor moves within the same node via
+  /// a pointer click (not keyboard). Without this, moving from one span to another
+  /// span on the same line would reveal the new span's markers immediately, which
+  /// can cause text reflow at the start of a drag selection.
+  ///
+  /// Only fires when:
+  /// - Node stays focused (no node transition).
+  /// - Selection is still collapsed (cursor move, not drag start).
+  /// - Cursor actually moved to a new offset.
+  /// - Reveal is currently active (`_isFirstFocus == false`).
+  /// - A pointer event happened recently (pointer is down or was down < 500ms ago).
+  void _resetFirstFocusOnPointerMove(bool wasFocused, int? wasOffset) {
+    if (!wasFocused || !_isFocused) return;
+    if (_nodeSelection == null || !_nodeSelection!.isCollapsed) return;
+    if (wasOffset == _cursorOffset) return;
+    if (_isFirstFocus) return; // already suppressed
+    final pointerDown = _pointerDownNotifier?.value == true;
+    final recentPointer = _lastPointerDownTime != null &&
+        DateTime.now().difference(_lastPointerDownTime!).inMilliseconds < 500;
+    if (!pointerDown && !recentPointer) return;
+    _isFirstFocus = true;
+    _tapRevealTimer?.cancel();
+    _tapRevealTimer = null;
   }
 
   void _updateFinalizeState(TextSelection? prevSelection) {
