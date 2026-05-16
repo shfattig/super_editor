@@ -1551,10 +1551,15 @@ class TextComponentState extends State<TextComponent> with DocumentComponent imp
       _isFocused = false;
       _cursorOffset = null;
       _nodeSelection = null;
-      // Discard any stale frozen state — node is no longer in the document selection.
-      _isFrozen = false;
-      _tapRevealTimer?.cancel();
-      _tapRevealTimer = null;
+      // If a pointer is currently held, the null selection is a transient drag-start
+      // clear (_onPanStart calls _clearSelection before establishing drag selection).
+      // Preserve the frozen state so markers stay visible until the drag selection
+      // is established. Without a pointer, discard stale freeze immediately.
+      if (_pointerDownNotifier?.value != true) {
+        _isFrozen = false;
+        _tapRevealTimer?.cancel();
+        _tapRevealTimer = null;
+      }
       return;
     }
     _isFocused = sel.base.nodeId == id || sel.extent.nodeId == id;
