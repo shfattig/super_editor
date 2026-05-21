@@ -750,6 +750,10 @@ class OrderedListItemComponent extends StatefulWidget {
     this.highlightWhenEmpty = false,
     this.underlines = const [],
     this.showDebugPaint = false,
+    this.computeInlineSpanOverride,
+    this.selectionNotifier,
+    this.rawToWorkingOffset,
+    this.workingToRawOffset,
   }) : super(key: key);
 
   final GlobalKey componentKey;
@@ -772,6 +776,12 @@ class OrderedListItemComponent extends StatefulWidget {
   final List<Underlines> underlines;
 
   final bool showDebugPaint;
+
+  final InlineSpan Function(BuildContext, AttributionStyleBuilder, bool isFocused, int? cursorOffset, TextSelection?)?
+      computeInlineSpanOverride;
+  final ValueListenable<DocumentSelection?>? selectionNotifier;
+  final int Function(int rawOffset, int? cursorRawOffset, TextSelection? nodeSelection)? rawToWorkingOffset;
+  final int Function(int workingOffset, int? cursorRawOffset, TextSelection? nodeSelection)? workingToRawOffset;
 
   @override
   State<OrderedListItemComponent> createState() => _OrderedListItemComponentState();
@@ -802,6 +812,8 @@ class _OrderedListItemComponentState extends State<OrderedListItemComponent> {
     final textScaler = MediaQuery.textScalerOf(context);
     final lineHeight = textScaler.scale(textStyle.fontSize! * (textStyle.height ?? 1.0));
 
+    final showNumeral = widget.computeInlineSpanOverride == null;
+
     return ProxyTextDocumentComponent(
       key: widget.componentKey,
       textComponentKey: _innerTextComponentKey,
@@ -810,17 +822,18 @@ class _OrderedListItemComponentState extends State<OrderedListItemComponent> {
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Container(
-              width: indentSpace,
-              height: lineHeight,
-              decoration: BoxDecoration(
-                border: widget.showDebugPaint ? Border.all(width: 1, color: Colors.grey) : null,
-              ),
-              child: SizedBox(
+            if (showNumeral)
+              Container(
+                width: indentSpace,
                 height: lineHeight,
-                child: widget.numeralBuilder(context, widget),
+                decoration: BoxDecoration(
+                  border: widget.showDebugPaint ? Border.all(width: 1, color: Colors.grey) : null,
+                ),
+                child: SizedBox(
+                  height: lineHeight,
+                  child: widget.numeralBuilder(context, widget),
+                ),
               ),
-            ),
             Expanded(
               child: TextComponent(
                 key: _innerTextComponentKey,
@@ -835,6 +848,10 @@ class _OrderedListItemComponentState extends State<OrderedListItemComponent> {
                 highlightWhenEmpty: widget.highlightWhenEmpty,
                 underlines: widget.underlines,
                 showDebugPaint: widget.showDebugPaint,
+                computeInlineSpanOverride: widget.computeInlineSpanOverride,
+                selectionNotifier: widget.selectionNotifier,
+                rawToWorkingOffset: widget.rawToWorkingOffset,
+                workingToRawOffset: widget.workingToRawOffset,
               ),
             ),
           ],
