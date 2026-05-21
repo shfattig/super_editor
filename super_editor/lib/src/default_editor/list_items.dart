@@ -1135,8 +1135,8 @@ class InsertNewlineInListItemAtCaretCommand extends BaseInsertNewlineAtCaretComm
       return;
     }
 
-    if (node.text.isEmpty) {
-      // The list item is empty. Convert it to a paragraph.
+    if (_isListItemContentEmpty(node)) {
+      // The list item has no content beyond the prefix. Convert it to a paragraph.
       executor.executeCommand(
         ConvertListItemToParagraphCommand(nodeId: node.id),
       );
@@ -1157,7 +1157,7 @@ class InsertNewlineInListItemAtCaretCommand extends BaseInsertNewlineAtCaretComm
           DocumentSelection.collapsed(
             position: DocumentPosition(
               nodeId: newNodeId,
-              nodePosition: const TextNodePosition(offset: 0),
+              nodePosition: TextNodePosition(offset: _listItemPrefixLength(node.type)),
             ),
           ),
           SelectionChangeType.insertContent,
@@ -1165,6 +1165,29 @@ class InsertNewlineInListItemAtCaretCommand extends BaseInsertNewlineAtCaretComm
         ),
       );
   }
+}
+
+/// Returns true when a [ListItemNode]'s text contains no user content beyond
+/// the markdown prefix (`"- "` for unordered, `"N. "` for ordered).
+bool _isListItemContentEmpty(ListItemNode node) {
+  final text = node.text.toPlainText();
+  return text.isEmpty ||
+      (node.type == ListItemType.unordered && text == '- ') ||
+      (node.type == ListItemType.ordered && RegExp(r'^\d+\. $').hasMatch(text));
+}
+
+/// Returns the conventional prefix length for a new list item of [type].
+/// Unordered: `"- "` = 2. Ordered: `"1. "` = 3.
+int _listItemPrefixLength(ListItemType type) =>
+    type == ListItemType.unordered ? 2 : 3;
+
+/// Strips the markdown prefix (`"- "` or `"N. "`) from a [ListItemNode]'s text,
+/// returning the content-only [AttributedText] with attributions adjusted.
+AttributedText _stripListItemPrefix(ListItemNode node) {
+  final text = node.text.toPlainText();
+  final match = RegExp(r'^(- |\d+\. )').firstMatch(text);
+  if (match == null) return node.text;
+  return node.text.copyText(match.end);
 }
 
 class ConvertListItemToParagraphRequest implements EditRequest {
@@ -1201,7 +1224,7 @@ class ConvertListItemToParagraphCommand extends EditCommand {
 
     final newParagraphNode = ParagraphNode(
       id: listItem.id,
-      text: listItem.text,
+      text: _stripListItemPrefix(listItem),
       metadata: newMetadata,
     );
     document.replaceNodeById(listItem.id, newParagraphNode);
@@ -1242,10 +1265,14 @@ class ConvertParagraphToListItemCommand extends EditCommand {
     final node = document.getNodeById(nodeId);
     final paragraphNode = node as ParagraphNode;
 
+    final prefix = type == ListItemType.unordered ? '- ' : '1. ';
     final newListItemNode = ListItemNode(
       id: paragraphNode.id,
       itemType: type,
-      text: paragraphNode.text,
+      text: paragraphNode.text.insert(
+        textToInsert: AttributedText(prefix),
+        startOffset: 0,
+      ),
     );
     document.replaceNodeById(paragraphNode.id, newListItemNode);
 
@@ -1284,10 +1311,15 @@ class ChangeListItemTypeCommand extends EditCommand {
     final document = context.document;
     final existingListItem = document.getNodeById(nodeId) as ListItemNode;
 
+    final newPrefix = newType == ListItemType.unordered ? '- ' : '1. ';
+    final contentText = _stripListItemPrefix(existingListItem);
     final newListItemNode = ListItemNode(
       id: existingListItem.id,
       itemType: newType,
-      text: existingListItem.text,
+      text: contentText.insert(
+        textToInsert: AttributedText(newPrefix),
+        startOffset: 0,
+      ),
     );
     document.replaceNodeById(existingListItem.id, newListItemNode);
 
@@ -1347,17 +1379,23 @@ class SplitListItemCommand extends EditCommand {
       updatedListItemNode,
     );
 
-    // Create a new node that will follow the current node. Set its text
-    // to the text that was removed from the current node.
+    // Create a new node that will follow the current node. The new node gets the
+    // conventional markdown prefix prepended so its text is navigable/editable,
+    // matching the convention used by the rest of the editor.
+    final newPrefix = listItemNode.type == ListItemType.ordered ? '1. ' : '- ';
+    final endTextWithPrefix = endText.insert(
+      textToInsert: AttributedText(newPrefix),
+      startOffset: 0,
+    );
     final newNode = listItemNode.type == ListItemType.ordered
         ? ListItemNode.ordered(
             id: newNodeId,
-            text: endText,
+            text: endTextWithPrefix,
             indent: listItemNode.indent,
           )
         : ListItemNode.unordered(
             id: newNodeId,
-            text: endText,
+            text: endTextWithPrefix,
             indent: listItemNode.indent,
           );
 
