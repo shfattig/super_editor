@@ -1,4 +1,5 @@
 import 'package:attributed_text/attributed_text.dart';
+import 'package:flutter/foundation.dart' show ValueListenable;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:super_editor/src/core/document_composer.dart';
@@ -211,6 +212,10 @@ class ListItemComponentBuilder implements ComponentBuilder {
         highlightWhenEmpty: componentViewModel.highlightWhenEmpty,
         underlines: componentViewModel.createUnderlines(),
         inlineWidgetBuilders: componentViewModel.inlineWidgetBuilders,
+        computeInlineSpanOverride: componentViewModel.computeInlineSpanOverride,
+        selectionNotifier: componentViewModel.selectionNotifier,
+        rawToWorkingOffset: componentViewModel.rawToWorkingOffset,
+        workingToRawOffset: componentViewModel.workingToRawOffset,
       );
     } else if (componentViewModel is OrderedListItemComponentViewModel) {
       return OrderedListItemComponent(
@@ -271,6 +276,27 @@ abstract class ListItemComponentViewModel extends SingleColumnLayoutComponentVie
 
   int indent;
 
+  /// Optional override for how the rich text span is computed.
+  /// See [TextComponent.computeInlineSpanOverride].
+  InlineSpan Function(
+    BuildContext context,
+    AttributionStyleBuilder styleBuilder,
+    bool isFocused,
+    int? cursorOffset,
+    TextSelection? nodeSelection,
+  )? computeInlineSpanOverride;
+
+  /// When set, passed directly to [TextComponent] for direct selection
+  /// subscription. See [TextComponent.selectionNotifier].
+  ValueListenable<DocumentSelection?>? selectionNotifier;
+
+  /// Maps a raw-string offset to the corresponding working-text offset.
+  /// When null, raw == working (no remapping needed).
+  int Function(int rawOffset, int? cursorRawOffset, TextSelection? nodeSelection)? rawToWorkingOffset;
+
+  /// Inverse of [rawToWorkingOffset].
+  int Function(int workingOffset, int? cursorRawOffset, TextSelection? nodeSelection)? workingToRawOffset;
+
   @override
   AttributedText text;
   @override
@@ -292,7 +318,12 @@ abstract class ListItemComponentViewModel extends SingleColumnLayoutComponentVie
   ListItemComponentViewModel internalCopy(ListItemComponentViewModel viewModel) {
     final copy = super.internalCopy(viewModel) as ListItemComponentViewModel;
 
-    copy.indent = indent;
+    copy
+      ..indent = indent
+      ..computeInlineSpanOverride = computeInlineSpanOverride
+      ..selectionNotifier = selectionNotifier
+      ..rawToWorkingOffset = rawToWorkingOffset
+      ..workingToRawOffset = workingToRawOffset;
 
     return copy;
   }
@@ -521,6 +552,10 @@ class UnorderedListItemComponent extends StatefulWidget {
     this.highlightWhenEmpty = false,
     this.underlines = const [],
     this.showDebugPaint = false,
+    this.computeInlineSpanOverride,
+    this.selectionNotifier,
+    this.rawToWorkingOffset,
+    this.workingToRawOffset,
   }) : super(key: key);
 
   final GlobalKey componentKey;
@@ -538,10 +573,20 @@ class UnorderedListItemComponent extends StatefulWidget {
   final bool showCaret;
   final Color caretColor;
   final bool highlightWhenEmpty;
-
   final List<Underlines> underlines;
-
   final bool showDebugPaint;
+
+  final InlineSpan Function(
+    BuildContext context,
+    AttributionStyleBuilder styleBuilder,
+    bool isFocused,
+    int? cursorOffset,
+    TextSelection? nodeSelection,
+  )? computeInlineSpanOverride;
+
+  final ValueListenable<DocumentSelection?>? selectionNotifier;
+  final int Function(int rawOffset, int? cursorRawOffset, TextSelection? nodeSelection)? rawToWorkingOffset;
+  final int Function(int workingOffset, int? cursorRawOffset, TextSelection? nodeSelection)? workingToRawOffset;
 
   @override
   State<UnorderedListItemComponent> createState() => _UnorderedListItemComponentState();
@@ -572,6 +617,10 @@ class _UnorderedListItemComponentState extends State<UnorderedListItemComponent>
     final textScaler = MediaQuery.textScalerOf(context);
     final lineHeight = textScaler.scale(textStyle.fontSize! * (textStyle.height ?? 1.25));
 
+    // When a computeInlineSpanOverride is provided, the caller is rendering the
+    // marker inside the span itself, so suppress the native dot widget.
+    final showDot = widget.computeInlineSpanOverride == null;
+
     return ProxyTextDocumentComponent(
       key: widget.componentKey,
       textComponentKey: _innerTextComponentKey,
@@ -580,16 +629,17 @@ class _UnorderedListItemComponentState extends State<UnorderedListItemComponent>
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Container(
-              width: indentSpace,
-              decoration: BoxDecoration(
-                border: widget.showDebugPaint ? Border.all(width: 1, color: Colors.grey) : null,
+            if (showDot)
+              Container(
+                width: indentSpace,
+                decoration: BoxDecoration(
+                  border: widget.showDebugPaint ? Border.all(width: 1, color: Colors.grey) : null,
+                ),
+                child: SizedBox(
+                  height: lineHeight,
+                  child: widget.dotBuilder(context, widget),
+                ),
               ),
-              child: SizedBox(
-                height: lineHeight,
-                child: widget.dotBuilder(context, widget),
-              ),
-            ),
             Expanded(
               child: TextComponent(
                 key: _innerTextComponentKey,
@@ -604,6 +654,10 @@ class _UnorderedListItemComponentState extends State<UnorderedListItemComponent>
                 highlightWhenEmpty: widget.highlightWhenEmpty,
                 underlines: widget.underlines,
                 showDebugPaint: widget.showDebugPaint,
+                computeInlineSpanOverride: widget.computeInlineSpanOverride,
+                selectionNotifier: widget.selectionNotifier,
+                rawToWorkingOffset: widget.rawToWorkingOffset,
+                workingToRawOffset: widget.workingToRawOffset,
               ),
             ),
           ],
