@@ -140,14 +140,14 @@ class UnorderedListItemConversionReaction extends ParagraphPrefixConversionReact
         existingNodeId: paragraph.id,
         newNode: ListItemNode.unordered(
           id: paragraph.id,
-          text: AttributedText(),
+          text: AttributedText('- '),
         ),
       ),
       ChangeSelectionRequest(
         DocumentSelection.collapsed(
           position: DocumentPosition(
             nodeId: paragraph.id,
-            nodePosition: const TextNodePosition(offset: 0),
+            nodePosition: const TextNodePosition(offset: 2),
           ),
         ),
         SelectionChangeType.placeCaret,
@@ -212,14 +212,14 @@ class OrderedListItemConversionReaction extends ParagraphPrefixConversionReactio
         existingNodeId: paragraph.id,
         newNode: ListItemNode.ordered(
           id: paragraph.id,
-          text: AttributedText(),
+          text: AttributedText('1. '),
         ),
       ),
       ChangeSelectionRequest(
         DocumentSelection.collapsed(
           position: DocumentPosition(
             nodeId: paragraph.id,
-            nodePosition: const TextNodePosition(offset: 0),
+            nodePosition: const TextNodePosition(offset: 3),
           ),
         ),
         SelectionChangeType.placeCaret,
