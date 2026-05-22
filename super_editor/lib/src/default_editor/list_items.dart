@@ -201,6 +201,7 @@ class ListItemComponentBuilder implements ComponentBuilder {
     if (componentViewModel is UnorderedListItemComponentViewModel) {
       return UnorderedListItemComponent(
         componentKey: componentContext.componentKey,
+        nodeId: componentViewModel.nodeId,
         text: componentViewModel.text,
         styleBuilder: componentViewModel.textStyleBuilder,
         indent: componentViewModel.indent,
@@ -220,6 +221,7 @@ class ListItemComponentBuilder implements ComponentBuilder {
     } else if (componentViewModel is OrderedListItemComponentViewModel) {
       return OrderedListItemComponent(
         componentKey: componentContext.componentKey,
+        nodeId: componentViewModel.nodeId,
         indent: componentViewModel.indent,
         listIndex: componentViewModel.ordinalValue!,
         text: componentViewModel.text,
@@ -232,6 +234,10 @@ class ListItemComponentBuilder implements ComponentBuilder {
         highlightWhenEmpty: componentViewModel.highlightWhenEmpty,
         underlines: componentViewModel.createUnderlines(),
         inlineWidgetBuilders: componentViewModel.inlineWidgetBuilders,
+        computeInlineSpanOverride: componentViewModel.computeInlineSpanOverride,
+        selectionNotifier: componentViewModel.selectionNotifier,
+        rawToWorkingOffset: componentViewModel.rawToWorkingOffset,
+        workingToRawOffset: componentViewModel.workingToRawOffset,
       );
     }
 
@@ -536,6 +542,7 @@ class UnorderedListItemComponent extends StatefulWidget {
   const UnorderedListItemComponent({
     Key? key,
     required this.componentKey,
+    this.nodeId,
     required this.text,
     this.textDirection = TextDirection.ltr,
     this.textAlignment = TextAlign.left,
@@ -559,6 +566,7 @@ class UnorderedListItemComponent extends StatefulWidget {
   }) : super(key: key);
 
   final GlobalKey componentKey;
+  final String? nodeId;
   final AttributedText text;
   final TextDirection textDirection;
   final TextAlign textAlignment;
@@ -656,6 +664,7 @@ class _UnorderedListItemComponentState extends State<UnorderedListItemComponent>
                 showDebugPaint: widget.showDebugPaint,
                 computeInlineSpanOverride: widget.computeInlineSpanOverride,
                 selectionNotifier: widget.selectionNotifier,
+                nodeId: widget.nodeId,
                 rawToWorkingOffset: widget.rawToWorkingOffset,
                 workingToRawOffset: widget.workingToRawOffset,
               ),
@@ -733,6 +742,7 @@ class OrderedListItemComponent extends StatefulWidget {
   const OrderedListItemComponent({
     Key? key,
     required this.componentKey,
+    this.nodeId,
     required this.listIndex,
     required this.text,
     this.textDirection = TextDirection.ltr,
@@ -757,6 +767,7 @@ class OrderedListItemComponent extends StatefulWidget {
   }) : super(key: key);
 
   final GlobalKey componentKey;
+  final String? nodeId;
   final int listIndex;
   final AttributedText text;
   final TextDirection textDirection;
@@ -850,6 +861,7 @@ class _OrderedListItemComponentState extends State<OrderedListItemComponent> {
                 showDebugPaint: widget.showDebugPaint,
                 computeInlineSpanOverride: widget.computeInlineSpanOverride,
                 selectionNotifier: widget.selectionNotifier,
+                nodeId: widget.nodeId,
                 rawToWorkingOffset: widget.rawToWorkingOffset,
                 workingToRawOffset: widget.workingToRawOffset,
               ),
@@ -1136,9 +1148,22 @@ class InsertNewlineInListItemAtCaretCommand extends BaseInsertNewlineAtCaretComm
     }
 
     if (_isListItemContentEmpty(node)) {
-      // The list item has no content beyond the prefix. Convert it to a paragraph.
+      // The list item has no content beyond the prefix. Convert it to a paragraph
+      // and reset the caret to offset 0 (the paragraph has empty text).
       executor.executeCommand(
         ConvertListItemToParagraphCommand(nodeId: node.id),
+      );
+      executor.executeCommand(
+        ChangeSelectionCommand(
+          DocumentSelection.collapsed(
+            position: DocumentPosition(
+              nodeId: node.id,
+              nodePosition: const TextNodePosition(offset: 0),
+            ),
+          ),
+          SelectionChangeType.insertContent,
+          SelectionReason.userInteraction,
+        ),
       );
       return;
     }
