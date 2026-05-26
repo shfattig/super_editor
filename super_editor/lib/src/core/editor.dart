@@ -973,6 +973,54 @@ class DocumentEdit extends EditEvent {
   int get hashCode => change.hashCode;
 }
 
+/// A [DocumentChange] produced when the entire document is replaced by a remote update.
+///
+/// [EditListener]s can filter this out to avoid treating remote content replacement
+/// as a user-initiated edit (e.g., to avoid dirtying the local editor state).
+class RemoteDocumentReplacedEvent extends DocumentChange {
+  const RemoteDocumentReplacedEvent();
+
+  @override
+  String describe() => "Remote document replaced";
+
+  @override
+  String toString() => "RemoteDocumentReplacedEvent";
+}
+
+/// Replaces all nodes in the active [MutableDocument] with nodes from [newContent].
+///
+/// This is used for live remote-sync updates: the document is updated in-place
+/// without disposing and recreating the editor, so cursor state is preserved.
+class ReplaceDocumentRequest implements EditRequest {
+  const ReplaceDocumentRequest(this.newContent);
+  final MutableDocument newContent;
+}
+
+EditCommand? replaceDocumentRequestHandler(Editor editor, EditRequest request) {
+  if (request is! ReplaceDocumentRequest) return null;
+  return _ReplaceDocumentCommand(request.newContent);
+}
+
+class _ReplaceDocumentCommand extends EditCommand {
+  _ReplaceDocumentCommand(this._newContent);
+  final MutableDocument _newContent;
+
+  @override
+  HistoryBehavior get historyBehavior => HistoryBehavior.notUndoable;
+
+  @override
+  void execute(EditContext context, CommandExecutor executor) {
+    final doc = context.document;
+    for (int i = doc.nodeCount - 1; i >= 0; i--) {
+      doc.deleteNodeAt(i);
+    }
+    for (int i = 0; i < _newContent.nodeCount; i++) {
+      doc.insertNodeAt(i, _newContent.getNodeAt(i)!);
+    }
+    executor.logChanges([DocumentEdit(const RemoteDocumentReplacedEvent())]);
+  }
+}
+
 /// An object that's notified with a change list from one or more commands that were just
 /// executed.
 abstract class EditReaction {
