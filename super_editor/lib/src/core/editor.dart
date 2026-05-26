@@ -1010,6 +1010,15 @@ class _ReplaceDocumentCommand extends EditCommand {
 
   @override
   void execute(EditContext context, CommandExecutor executor) {
+    // Clear selection first so no listener dereferences a node that is about
+    // to be deleted (avoids null-check crashes during the replacement).
+    executor.executeCommand(
+      const ChangeSelectionCommand(
+        null,
+        SelectionChangeType.clearSelection,
+        SelectionReason.userInteraction,
+      ),
+    );
     final doc = context.document;
     for (int i = doc.nodeCount - 1; i >= 0; i--) {
       doc.deleteNodeAt(i);
