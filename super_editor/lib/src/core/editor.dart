@@ -1006,7 +1006,7 @@ class _ReplaceDocumentCommand extends EditCommand {
   final MutableDocument _newContent;
 
   @override
-  HistoryBehavior get historyBehavior => HistoryBehavior.notUndoable;
+  HistoryBehavior get historyBehavior => HistoryBehavior.nonHistorical;
 
   @override
   void execute(EditContext context, CommandExecutor executor) {
