@@ -128,6 +128,7 @@ class SuperEditor extends StatefulWidget {
     this.isImeConnected,
     this.keyboardActions,
     this.selectorHandlers,
+    this.pasteInterceptor,
     this.gestureMode,
     this.contentTapDelegateFactories = const [superEditorLaunchLinkTapHandlerFactory],
     this.selectionLayerLinks,
@@ -339,6 +340,13 @@ class SuperEditor extends StatefulWidget {
   /// The IME reports selectors as unique `String`s, therefore selector handlers are
   /// defined as a mapping from selector names to handler functions.
   final Map<String, SuperEditorSelectorHandler>? selectorHandlers;
+
+  /// Optional hook consulted before the default text paste, for every paste
+  /// path (hardware ⌘/Ctrl-V and the mobile selection toolbar). Given the
+  /// resolved paste position, return `true` to consume the paste (e.g. after
+  /// handling a non-text clipboard payload such as an image). Forwarded to
+  /// [CommonEditorOperations.pasteInterceptor].
+  final Future<bool> Function(DocumentPosition pastePosition)? pasteInterceptor;
 
   /// Shows, hides, and positions a floating toolbar and magnifier.
   @Deprecated(
@@ -594,6 +602,7 @@ class SuperEditorState extends State<SuperEditor> {
         document: widget.editor.document,
         composer: _composer,
         documentLayoutResolver: () => _docLayoutKey.currentState as DocumentLayout,
+        pasteInterceptor: widget.pasteInterceptor,
       ),
     );
 

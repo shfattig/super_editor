@@ -46,6 +46,7 @@ class CommonEditorOperations {
     required this.editor,
     required this.composer,
     required this.documentLayoutResolver,
+    this.pasteInterceptor,
   });
 
   // Marked as protected for extension methods and subclasses
@@ -60,6 +61,13 @@ class CommonEditorOperations {
   // Marked as protected for extension methods and subclasses
   @protected
   final DocumentLayoutResolver documentLayoutResolver;
+
+  /// Optional hook consulted by [paste] before the default `text/plain`
+  /// insertion. Given the resolved paste position, it may handle non-text
+  /// clipboard content (e.g. an image attachment) and return `true` to consume
+  /// the paste, skipping the text paste. Returning `false` (or being unset)
+  /// falls through to the normal text paste.
+  final Future<bool> Function(DocumentPosition pastePosition)? pasteInterceptor;
 
   /// Clears the [DocumentComposer]'s current selection and sets
   /// the selection to the given collapsed [documentPosition].
@@ -2402,6 +2410,15 @@ class CommonEditorOperations {
     required DocumentComposer composer,
     required DocumentPosition pastePosition,
   }) async {
+    // Give the app a chance to handle non-text clipboard content (e.g. an
+    // image) at this position before falling back to the text paste. This is
+    // the single choke point for every paste path — desktop ⌘/Ctrl-V and the
+    // mobile selection toolbar both reach paste() → _paste().
+    final interceptor = pasteInterceptor;
+    if (interceptor != null && await interceptor(pastePosition)) {
+      return;
+    }
+
     final content = (await Clipboard.getData('text/plain'))?.text ?? '';
 
     editor.execute([
