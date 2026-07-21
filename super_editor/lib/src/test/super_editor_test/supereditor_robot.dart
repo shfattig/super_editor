@@ -378,6 +378,16 @@ extension SuperEditorRobot on WidgetTester {
     await ime.typeText(text, getter: () => imeClientGetter(imeOwnerFinder));
   }
 
+  /// Simulates the user pressing backspace in a [SuperEditor] by sending a
+  /// real IME deletion delta from the platform (the same path a physical or
+  /// software backspace press takes when `inputSource: TextInputSource.ime`).
+  ///
+  /// Provide an [imeOwnerFinder] if there are multiple [ImeOwner]s in the
+  /// current widget tree.
+  Future<void> backspaceImeText([Finder? imeOwnerFinder]) async {
+    await ime.backspace(getter: () => imeClientGetter(imeOwnerFinder));
+  }
+
   /// Simulates the user holding the spacebar and starting the floating cursor gesture.
   ///
   /// The initial offset is at (0,0).

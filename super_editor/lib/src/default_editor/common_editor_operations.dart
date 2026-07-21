@@ -1557,6 +1557,18 @@ class CommonEditorOperations {
           nodeId: baseNode.id,
           nodePosition: TextNodePosition(offset: min(baseOffset, extentOffset)),
         );
+      } else if (baseNode is ImeTextHost) {
+        // A single-node selection inside a custom text-addressable run (e.g.
+        // a table cell) — the node resolves "which offset" via ImeTextHost,
+        // the same way a TextNode does natively above.
+        final imeHost = baseNode as ImeTextHost;
+        final baseOffset = imeHost.imeOffsetAt(basePosition.nodePosition);
+        final extentOffset = imeHost.imeOffsetAt(extentPosition.nodePosition);
+
+        newSelectionPosition = DocumentPosition(
+          nodeId: baseNode.id,
+          nodePosition: imeHost.imeNodePositionAt(basePosition.nodePosition, min(baseOffset, extentOffset)),
+        );
       } else {
         throw Exception(
             'Unknown selection position type: $basePosition, for node: $baseNode, within document selection: $selection');

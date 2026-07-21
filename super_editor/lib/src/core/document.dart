@@ -538,6 +538,17 @@ abstract class ImeTextHost {
   /// IME (as opposed to [imeNodePositionAt], needed to deserialize an IME
   /// offset the other way).
   int imeOffsetAt(NodePosition position);
+
+  /// A copy of this node with the addressable run at [position] replaced by
+  /// [newText] in full — the write-back counterpart of [imeTextAt], needed
+  /// so a single-node deletion (backspace/delete within one run) can
+  /// reconstruct the node the same way a single-node insertion already does
+  /// via an app-registered `InsertTextAtImeHostPositionRequest` handler.
+  /// Unlike insertion (dispatched as a request the app owns), deletion is
+  /// resolved synchronously inside `DeleteContentCommand`, which has no
+  /// request-dispatch point to hand off to — so this returns the new node
+  /// directly instead.
+  DocumentNode imeReplaceTextAt(NodePosition position, AttributedText newText);
 }
 
 /// Keys to access metadata on a [DocumentNode].

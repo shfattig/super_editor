@@ -991,6 +991,36 @@ class DeleteContentCommand extends EditCommand {
       ];
     }
 
+    final imeHost = node is ImeTextHost ? node as ImeTextHost : null;
+    if (imeHost != null) {
+      final hostText = imeHost.imeTextAt(startPosition);
+      if (hostText == null) {
+        return [];
+      }
+      _log.log('_deleteSelectionWithinSingleNode', ' - its an ImeTextHost');
+      final startOffset = imeHost.imeOffsetAt(startPosition);
+      final endOffset = imeHost.imeOffsetAt(endPosition);
+
+      final deletedText = hostText.copyText(startOffset, endOffset);
+      document.replaceNodeById(
+        node.id,
+        imeHost.imeReplaceTextAt(
+          startPosition,
+          hostText.removeRegion(startOffset: startOffset, endOffset: endOffset),
+        ),
+      );
+
+      return [
+        DocumentEdit(
+          TextDeletedEvent(
+            node.id,
+            deletedText: deletedText,
+            offset: startOffset,
+          ),
+        ),
+      ];
+    }
+
     return [];
   }
 
