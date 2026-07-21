@@ -530,6 +530,14 @@ abstract class ImeTextHost {
   /// offset belongs to). [position] is the same value last passed to
   /// [imeTextAt] that produced the run this offset is relative to.
   NodePosition imeNodePositionAt(NodePosition position, int offset);
+
+  /// The inverse of [imeNodePositionAt]: the plain character offset
+  /// [position] represents *within its own addressable run* (e.g. a table
+  /// cell position's offset into that cell's text, discarding the row/col).
+  /// Needed to serialize an existing document selection/position back to the
+  /// IME (as opposed to [imeNodePositionAt], needed to deserialize an IME
+  /// offset the other way).
+  int imeOffsetAt(NodePosition position);
 }
 
 /// Keys to access metadata on a [DocumentNode].

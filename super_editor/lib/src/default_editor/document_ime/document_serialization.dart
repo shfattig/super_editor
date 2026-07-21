@@ -414,6 +414,15 @@ class DocumentImeSerializer {
       return TextPosition(offset: imeRange.start + (docPosition.nodePosition as TextNodePosition).offset);
     }
 
+    // Sailor addition: the write-back mirror of the ImeTextHost branch in
+    // _imeToDocumentPosition.
+    final node = _doc.getNodeById(docPosition.nodeId);
+    final hostPosition = _imeHostPositions[node?.id];
+    final imeHost = node is ImeTextHost ? node as ImeTextHost : null;
+    if (imeHost != null && hostPosition != null && imeHost.imeTextAt(hostPosition) != null) {
+      return TextPosition(offset: imeRange.start + imeHost.imeOffsetAt(nodePosition));
+    }
+
     throw Exception("Super Editor doesn't know how to convert a $nodePosition into an IME-compatible selection");
   }
 
