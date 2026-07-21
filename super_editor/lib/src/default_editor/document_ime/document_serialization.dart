@@ -1,5 +1,6 @@
 import 'dart:math';
 
+import 'package:attributed_text/attributed_text.dart';
 import 'package:flutter/services.dart';
 import 'package:super_editor/src/core/document.dart';
 import 'package:super_editor/src/core/document_selection.dart';
@@ -44,6 +45,23 @@ class DocumentImeSerializer {
   final PrependedCharacterPolicy _prependedCharacterPolicy;
   String _prependedPlaceholder = '';
 
+  // Sailor addition: for a node serialized through [ImeTextHost] (not a
+  // [TextNode] itself), the [NodePosition] that resolved the addressable run
+  // — needed by [_imeToDocumentPosition] to reconstruct the node's own
+  // position type (e.g. re-attach a table cell's row/col) from a plain IME
+  // offset, the same way the [TextNode] branch reconstructs a
+  // [TextNodePosition] for free from node identity alone.
+  final _imeHostPositions = <String, NodePosition>{};
+
+  /// The [NodePosition] [selection] currently has on node [nodeId] (extent
+  /// preferred over base — extent is where typing/composition happens), or
+  /// `null` when [selection] doesn't touch that node at all.
+  NodePosition? _hostPositionFor(String nodeId) {
+    if (selection.extent.nodeId == nodeId) return selection.extent.nodePosition;
+    if (selection.base.nodeId == nodeId) return selection.base.nodePosition;
+    return null;
+  }
+
   void _serialize() {
     editorImeLog.fine("Creating an IME model from document, selection, and composing region");
     final buffer = StringBuffer();
@@ -79,7 +97,20 @@ class DocumentImeSerializer {
       }
 
       final node = selectedNodes[i];
-      if (node is! TextNode) {
+      // Sailor addition: a non-TextNode that hosts an addressable text run
+      // for the selection's current position on it (e.g. a table's focused
+      // cell) gets full per-character IME treatment for that run, same as a
+      // real TextNode below — just sourced from imeTextAt() instead of the
+      // node's own .text.
+      AttributedText? hostText;
+      NodePosition? hostPosition;
+      final imeHost = node is ImeTextHost ? node as ImeTextHost : null;
+      if (imeHost != null) {
+        hostPosition = _hostPositionFor(node.id);
+        if (hostPosition != null) hostText = imeHost.imeTextAt(hostPosition);
+      }
+
+      if (node is! TextNode && hostText == null) {
         buffer.write('~');
         characterCount += 1;
 
@@ -90,16 +121,19 @@ class DocumentImeSerializer {
         continue;
       }
 
+      final text = hostText ?? (node as TextNode).text;
+      if (hostText != null) _imeHostPositions[node.id] = hostPosition!;
+
       // Cache mappings between the IME text range and the document position
       // so that we can easily convert between the two, when requested.
-      final imeRange = TextRange(start: characterCount, end: characterCount + node.text.length);
-      editorImeLog.finer("IME range $imeRange -> text node content '${node.text.toPlainText()}'");
+      final imeRange = TextRange(start: characterCount, end: characterCount + text.length);
+      editorImeLog.finer("IME range $imeRange -> text node content '${text.toPlainText()}'");
       imeRangesToDocTextNodes[imeRange] = node.id;
       docTextNodesToImeRanges[node.id] = imeRange;
 
       // Concatenate this node's text with the previous nodes.
-      buffer.write(node.text.toPlainText());
-      characterCount += node.text.length;
+      buffer.write(text.toPlainText());
+      characterCount += text.length;
     }
 
     imeText = buffer.toString();
@@ -266,11 +300,20 @@ class DocumentImeSerializer {
     for (final range in imeRangesToDocTextNodes.keys) {
       if (range.start <= imePosition.offset && imePosition.offset <= range.end) {
         final node = _doc.getNodeById(imeRangesToDocTextNodes[range]!)!;
+        final hostPosition = _imeHostPositions[node.id];
 
         if (node is TextNode) {
           return DocumentPosition(
             nodeId: imeRangesToDocTextNodes[range]!,
             nodePosition: TextNodePosition(offset: imePosition.offset - range.start),
+          );
+        } else if (node is ImeTextHost && hostPosition != null) {
+          // Sailor addition: re-attach this node's own position shape (e.g. a
+          // table cell's row/col) around the plain character offset, mirroring
+          // the TextNode branch above.
+          return DocumentPosition(
+            nodeId: node.id,
+            nodePosition: (node as ImeTextHost).imeNodePositionAt(hostPosition, imePosition.offset - range.start),
           );
         } else {
           if (imePosition.offset <= range.start) {

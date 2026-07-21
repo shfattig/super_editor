@@ -1,3 +1,4 @@
+import 'package:attributed_text/attributed_text.dart';
 import 'package:collection/collection.dart';
 import 'package:flutter/widgets.dart';
 import 'package:super_editor/src/default_editor/text_ai.dart';
@@ -500,6 +501,35 @@ abstract class NodePosition {
   /// text offset, but have different affinities, returns `true` from [isEquivalentTo],
   /// even though [==] returns `false`.
   bool isEquivalentTo(NodePosition other);
+}
+
+/// Optional capability for a [DocumentNode] that isn't a [TextNode] itself,
+/// but whose current [NodePosition] addresses a genuinely text-editable run
+/// somewhere inside it — e.g. a grid/table node whose currently-focused cell
+/// should behave like ordinary text content for IME purposes (composition,
+/// autocorrect, delta-based insertion/replacement/deletion), even though the
+/// node as a whole isn't linearly text-addressable.
+///
+/// This is a Sailor-added extension point (not upstream super_editor). The
+/// IME integration (`document_ime/document_serialization.dart`,
+/// `document_ime/document_delta_editing.dart`) already special-cases exactly
+/// two position shapes: [TextNodePosition] (full per-character IME) and
+/// [UpstreamDownstreamNodePosition] (whole-block, no interior addressing). A
+/// node implementing this interface gets IME text-editing treatment for the
+/// specific run [position] resolves to, without needing to become a
+/// [TextNode] itself or without the IME core needing to know the node's
+/// concrete type.
+abstract class ImeTextHost {
+  /// The live text content addressed by [position], or `null` when
+  /// [position] doesn't resolve to a text-editable run on this node (falls
+  /// back to whole-block IME treatment).
+  AttributedText? imeTextAt(NodePosition position);
+
+  /// This node's own [NodePosition] for plain character [offset] within the
+  /// run [position] addressed (e.g. re-attaching the row/col a table cell's
+  /// offset belongs to). [position] is the same value last passed to
+  /// [imeTextAt] that produced the run this offset is relative to.
+  NodePosition imeNodePositionAt(NodePosition position, int offset);
 }
 
 /// Keys to access metadata on a [DocumentNode].

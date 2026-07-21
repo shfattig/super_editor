@@ -2494,6 +2494,28 @@ class InsertTextRequest implements EditRequest {
   final DateTime? createdAt;
 }
 
+/// Sailor addition: the [ImeTextHost] counterpart of [InsertTextRequest] —
+/// issued when the IME inserts text at a position whose node isn't a
+/// [TextNode] (e.g. a table's focused cell), so [InsertTextRequest]'s own
+/// handler (which resolves a [TextNode] by id) doesn't apply. Core has no
+/// default handler for this request; the app that defines the [ImeTextHost]
+/// node registers its own handler, the same way every other app-specific
+/// request in a super_editor-based app does (this keeps core fully decoupled
+/// from what an "ImeTextHost" concretely is).
+class InsertTextAtImeHostPositionRequest implements EditRequest {
+  const InsertTextAtImeHostPositionRequest({
+    required this.nodeId,
+    required this.nodePosition,
+    required this.textToInsert,
+    required this.attributions,
+  });
+
+  final String nodeId;
+  final NodePosition nodePosition;
+  final String textToInsert;
+  final Set<Attribution> attributions;
+}
+
 class InsertTextCommand extends EditCommand {
   InsertTextCommand({
     required this.documentPosition,

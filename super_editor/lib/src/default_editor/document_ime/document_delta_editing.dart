@@ -362,6 +362,32 @@ class TextDeltasDocumentEditor {
       insertionPosition = DocumentPosition(nodeId: insertionNode.id, nodePosition: insertionNode.endPosition);
     }
 
+    // Sailor addition: an ImeTextHost (e.g. a table's focused cell) isn't a
+    // TextNode itself, so it can't take the InsertTextRequest path below
+    // (that request's handler resolves a TextNode by id internally). Issue a
+    // generic, app-delegatable request instead — the app registers its own
+    // handler for it (same pattern as every other app-specific request in
+    // this codebase, e.g. ReplaceDocumentRequest), so core never needs to
+    // know what a "table cell" is.
+    if (insertionNode is ImeTextHost && insertionNode is! TextNode) {
+      editorOpsLog.fine("Executing ImeTextHost text insertion request.");
+      editor.execute([
+        if (selection.value != DocumentSelection.collapsed(position: insertionPosition))
+          ChangeSelectionRequest(
+            DocumentSelection.collapsed(position: insertionPosition),
+            SelectionChangeType.placeCaret,
+            SelectionReason.userInteraction,
+          ),
+        InsertTextAtImeHostPositionRequest(
+          nodeId: insertionPosition.nodeId,
+          nodePosition: insertionPosition.nodePosition,
+          textToInsert: text,
+          attributions: composerPreferences.currentAttributions,
+        ),
+      ]);
+      return true;
+    }
+
     if (insertionNode is! TextNode || insertionPosition.nodePosition is! TextNodePosition) {
       editorOpsLog.fine(
           "Couldn't insert text because Super Editor doesn't know how to handle a node of type: $insertionNode, with position: ${insertionPosition.nodePosition}");
