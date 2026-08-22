@@ -11,6 +11,7 @@ class AndroidTextEditingFloatingToolbar extends StatefulWidget {
     this.onCopyPressed,
     this.onPastePressed,
     this.onSelectAllPressed,
+    this.onCreateNotePressed,
   }) : super(key: key);
 
   final Key? floatingToolbarKey;
@@ -20,6 +21,11 @@ class AndroidTextEditingFloatingToolbar extends StatefulWidget {
   final VoidCallback? onCopyPressed;
   final VoidCallback? onPastePressed;
   final VoidCallback? onSelectAllPressed;
+
+  /// App-supplied extra action (e.g. Sailor's "Create note from selection"),
+  /// appended after the standard buttons. Omitted entirely when null, same as
+  /// the standard buttons above.
+  final VoidCallback? onCreateNotePressed;
 
   @override
   State<AndroidTextEditingFloatingToolbar> createState() => _AndroidTextEditingFloatingToolbarState();
@@ -97,6 +103,11 @@ class _AndroidTextEditingFloatingToolbarState extends State<AndroidTextEditingFl
         _ButtonViewModel(
           onPressed: widget.onSelectAllPressed!,
           title: 'Select All',
+        ),
+      if (widget.onCreateNotePressed != null)
+        _ButtonViewModel(
+          onPressed: widget.onCreateNotePressed!,
+          title: 'Create note',
         ),
     ];
 

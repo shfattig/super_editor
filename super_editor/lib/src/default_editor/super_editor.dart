@@ -129,6 +129,8 @@ class SuperEditor extends StatefulWidget {
     this.keyboardActions,
     this.selectorHandlers,
     this.pasteInterceptor,
+    this.onCreateNoteFromSelection,
+    this.canCreateNoteFromSelection,
     this.gestureMode,
     this.contentTapDelegateFactories = const [superEditorLaunchLinkTapHandlerFactory],
     this.selectionLayerLinks,
@@ -347,6 +349,18 @@ class SuperEditor extends StatefulWidget {
   /// handling a non-text clipboard payload such as an image). Forwarded to
   /// [CommonEditorOperations.pasteInterceptor].
   final Future<bool> Function(DocumentPosition pastePosition)? pasteInterceptor;
+
+  /// App-supplied extra action offered in the Android selection toolbar (no
+  /// equivalent on iOS: the OS-native context menu on iOS 16+ can't be
+  /// extended with custom items, and the Cupertino-style fallback used below
+  /// that version is intentionally left untouched for consistency). Called
+  /// with the [BuildContext] of the toolbar itself, a descendant of this
+  /// [SuperEditor]. Ignored on iOS/desktop.
+  final void Function(BuildContext context)? onCreateNoteFromSelection;
+
+  /// Whether [onCreateNoteFromSelection] should be offered for the current
+  /// selection. Ignored if [onCreateNoteFromSelection] is null.
+  final bool Function(DocumentSelection selection)? canCreateNoteFromSelection;
 
   /// Shows, hides, and positions a floating toolbar and magnifier.
   @Deprecated(
@@ -918,6 +932,8 @@ class SuperEditorState extends State<SuperEditor> {
             SuperEditorAndroidControlsScope.rootOf(context),
             editContext.composer.selectionNotifier,
             focalPoint,
+            onCreateNoteFromSelection: widget.onCreateNoteFromSelection,
+            canCreateNoteFromSelection: widget.canCreateNoteFromSelection,
           ),
           child: child,
         );
@@ -1094,14 +1110,18 @@ Widget defaultAndroidEditorToolbarBuilder(
   CommonEditorOperations editorOps,
   SuperEditorAndroidControlsController editorControlsController,
   ValueListenable<DocumentSelection?> selectionNotifier,
-  LeaderLink focalPoint,
-) {
+  LeaderLink focalPoint, {
+  void Function(BuildContext context)? onCreateNoteFromSelection,
+  bool Function(DocumentSelection selection)? canCreateNoteFromSelection,
+}) {
   return DefaultAndroidEditorToolbar(
     floatingToolbarKey: floatingToolbarKey,
     focalPoint: focalPoint,
     editorOps: editorOps,
     editorControlsController: editorControlsController,
     selectionNotifier: selectionNotifier,
+    onCreateNoteFromSelection: onCreateNoteFromSelection,
+    canCreateNoteFromSelection: canCreateNoteFromSelection,
   );
 }
 
@@ -1114,6 +1134,8 @@ class DefaultAndroidEditorToolbar extends StatelessWidget {
     required this.editorControlsController,
     required this.selectionNotifier,
     required this.focalPoint,
+    this.onCreateNoteFromSelection,
+    this.canCreateNoteFromSelection,
   });
 
   final Key? floatingToolbarKey;
@@ -1121,12 +1143,17 @@ class DefaultAndroidEditorToolbar extends StatelessWidget {
   final CommonEditorOperations editorOps;
   final SuperEditorAndroidControlsController editorControlsController;
   final ValueListenable<DocumentSelection?> selectionNotifier;
+  final void Function(BuildContext context)? onCreateNoteFromSelection;
+  final bool Function(DocumentSelection selection)? canCreateNoteFromSelection;
 
   @override
   Widget build(BuildContext context) {
     return ValueListenableBuilder(
       valueListenable: selectionNotifier,
       builder: (context, selection, child) {
+        final showCreateNote = selection != null &&
+            onCreateNoteFromSelection != null &&
+            (canCreateNoteFromSelection?.call(selection) ?? true);
         return AndroidTextEditingFloatingToolbar(
           floatingToolbarKey: floatingToolbarKey,
           focalPoint: focalPoint,
@@ -1138,6 +1165,7 @@ class DefaultAndroidEditorToolbar extends StatelessWidget {
               : null,
           onPastePressed: _paste,
           onSelectAllPressed: _selectAll,
+          onCreateNotePressed: showCreateNote ? () => _createNote(context) : null,
         );
       },
     );
@@ -1160,6 +1188,11 @@ class DefaultAndroidEditorToolbar extends StatelessWidget {
 
   void _selectAll() {
     editorOps.selectAll();
+  }
+
+  void _createNote(BuildContext context) {
+    onCreateNoteFromSelection!(context);
+    editorControlsController.hideToolbar();
   }
 }
 
