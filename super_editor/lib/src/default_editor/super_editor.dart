@@ -129,6 +129,7 @@ class SuperEditor extends StatefulWidget {
     this.keyboardActions,
     this.selectorHandlers,
     this.pasteInterceptor,
+    this.copySerializer,
     this.onCreateNoteFromSelection,
     this.canCreateNoteFromSelection,
     this.gestureMode,
@@ -349,6 +350,15 @@ class SuperEditor extends StatefulWidget {
   /// handling a non-text clipboard payload such as an image). Forwarded to
   /// [CommonEditorOperations.pasteInterceptor].
   final Future<bool> Function(DocumentPosition pastePosition)? pasteInterceptor;
+
+  /// Forwarded verbatim to [CommonEditorOperations.copySerializer] -- see its
+  /// doc. Applies to every caller of [CommonEditorOperations.copy]/[cut],
+  /// including the Android/iOS selection-toolbar Copy/Cut buttons, not just
+  /// hardware-keyboard shortcuts (an app wiring its own keyboard-shortcut
+  /// interception, e.g. via [keyboardActions], gets this too as long as that
+  /// interception itself calls through to `commonOps.copy()`/`cut()` rather
+  /// than reimplementing clipboard serialization separately).
+  final String Function(Document document, DocumentSelection selection)? copySerializer;
 
   /// App-supplied extra action offered in the Android selection toolbar (no
   /// equivalent on iOS: the OS-native context menu on iOS 16+ can't be
@@ -617,6 +627,7 @@ class SuperEditorState extends State<SuperEditor> {
         composer: _composer,
         documentLayoutResolver: () => _docLayoutKey.currentState as DocumentLayout,
         pasteInterceptor: widget.pasteInterceptor,
+        copySerializer: widget.copySerializer,
       ),
     );
 

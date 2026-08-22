@@ -47,6 +47,7 @@ class CommonEditorOperations {
     required this.composer,
     required this.documentLayoutResolver,
     this.pasteInterceptor,
+    this.copySerializer,
   });
 
   // Marked as protected for extension methods and subclasses
@@ -68,6 +69,14 @@ class CommonEditorOperations {
   /// the paste, skipping the text paste. Returning `false` (or being unset)
   /// falls through to the normal text paste.
   final Future<bool> Function(DocumentPosition pastePosition)? pasteInterceptor;
+
+  /// Optional override for [copy] and [cut]'s clipboard serialization,
+  /// consulted instead of the default [_textInSelection] (plain
+  /// [AttributedText.toPlainText], which substitutes a placeholder character
+  /// for any embedded [AttributedText.placeholders] object -- destroying it
+  /// on the clipboard). Given the document and the current selection, return
+  /// the exact string to place on the clipboard.
+  final String Function(Document document, DocumentSelection selection)? copySerializer;
 
   /// Clears the [DocumentComposer]'s current selection and sets
   /// the selection to the given collapsed [documentPosition].
@@ -2285,10 +2294,11 @@ class CommonEditorOperations {
   /// Serializes the current selection to plain text, and adds it to the
   /// clipboard.
   void copy() {
-    final textToCopy = _textInSelection(
-      document: document,
-      documentSelection: composer.selection!,
-    );
+    final textToCopy = copySerializer?.call(document, composer.selection!) ??
+        _textInSelection(
+          document: document,
+          documentSelection: composer.selection!,
+        );
     // TODO: figure out a general approach for asynchronous behaviors that
     //       need to be carried out in response to user input.
     _saveToClipboard(textToCopy);
@@ -2297,10 +2307,11 @@ class CommonEditorOperations {
   /// Serializes the current selection to plain text, adds it to the
   /// clipboard, and then deletes the selected content.
   void cut() {
-    final textToCut = _textInSelection(
-      document: document,
-      documentSelection: composer.selection!,
-    );
+    final textToCut = copySerializer?.call(document, composer.selection!) ??
+        _textInSelection(
+          document: document,
+          documentSelection: composer.selection!,
+        );
     // TODO: figure out a general approach for asynchronous behaviors that
     //       need to be carried out in response to user input.
     _saveToClipboard(textToCut);

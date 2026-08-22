@@ -185,6 +185,88 @@ void main() {
       });
     });
 
+    group('copySerializer', () {
+      CommonEditorOperations opsFor(
+        MutableDocument document,
+        MutableDocumentComposer composer, {
+        String Function(Document, DocumentSelection)? copySerializer,
+      }) =>
+          CommonEditorOperations(
+            document: document,
+            editor: Editor(editables: {
+              Editor.documentKey: document,
+              Editor.composerKey: composer,
+            }),
+            composer: composer,
+            documentLayoutResolver: () => throw UnimplementedError(),
+            copySerializer: copySerializer,
+          );
+
+      testWidgets('copy() defers to copySerializer when provided, over plain toPlainText', (tester) async {
+        final document = MutableDocument(nodes: [
+          ParagraphNode(id: '1', text: AttributedText('hello world')),
+        ]);
+        final composer = MutableDocumentComposer(
+          initialSelection: const DocumentSelection(
+            base: DocumentPosition(nodeId: '1', nodePosition: TextNodePosition(offset: 0)),
+            extent: DocumentPosition(nodeId: '1', nodePosition: TextNodePosition(offset: 5)),
+          ),
+        );
+        Document? seenDocument;
+        DocumentSelection? seenSelection;
+        final ops = opsFor(
+          document,
+          composer,
+          copySerializer: (doc, sel) {
+            seenDocument = doc;
+            seenSelection = sel;
+            return 'CUSTOM SERIALIZATION';
+          },
+        );
+
+        String? clipped;
+        tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(SystemChannels.platform, (call) async {
+          if (call.method == 'Clipboard.setData') {
+            clipped = (call.arguments as Map)['text'] as String?;
+          }
+          return null;
+        });
+        addTearDown(() => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(SystemChannels.platform, null));
+
+        ops.copy();
+
+        expect(seenDocument, document);
+        expect(seenSelection, composer.selection);
+        expect(clipped, 'CUSTOM SERIALIZATION');
+      });
+
+      testWidgets('copy() falls back to plain toPlainText when copySerializer is null', (tester) async {
+        final document = MutableDocument(nodes: [
+          ParagraphNode(id: '1', text: AttributedText('hello world')),
+        ]);
+        final composer = MutableDocumentComposer(
+          initialSelection: const DocumentSelection(
+            base: DocumentPosition(nodeId: '1', nodePosition: TextNodePosition(offset: 0)),
+            extent: DocumentPosition(nodeId: '1', nodePosition: TextNodePosition(offset: 5)),
+          ),
+        );
+        final ops = opsFor(document, composer);
+
+        String? clipped;
+        tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(SystemChannels.platform, (call) async {
+          if (call.method == 'Clipboard.setData') {
+            clipped = (call.arguments as Map)['text'] as String?;
+          }
+          return null;
+        });
+        addTearDown(() => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(SystemChannels.platform, null));
+
+        ops.copy();
+
+        expect(clipped, 'hello');
+      });
+    });
+
     group('getDocumentPositionAfterExpandedDeletion', () {
       test('returns null for collapsed selection', () {
         final node = HorizontalRuleNode(
